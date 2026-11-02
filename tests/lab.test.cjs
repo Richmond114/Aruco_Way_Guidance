@@ -6,7 +6,7 @@ test('calibration validation rejects missing fields and mismatched resolution',(
 });
 test('actual OpenCV.js: distorted synthetic corners, millimetres, order and resize',async()=>{
  const cv=require('../../.cache/opencv-lab.js'); await new Promise(resolve=>cv.then(()=>resolve()));
- for(const mm of [30,80])for(const z of [.5,1,1.5,2]){
+ for(const mm of [30,80])for(const z of [.5,1,1.5,2,3]){
   const mats=[];const mat=(r,c,t,data)=>{const m=cv.matFromArray(r,c,t,data);mats.push(m);return m;};
   try{
    const obj=mat(4,1,cv.CV_64FC3,L.objectPoints(mm)),K=mat(3,3,cv.CV_64F,calibration.cameraMatrix.flat()),D=mat(5,1,cv.CV_64F,calibration.distCoeffs);
@@ -14,10 +14,12 @@ test('actual OpenCV.js: distorted synthetic corners, millimetres, order and resi
    const corners=Array.from({length:4},(_,i)=>({x:out.data64F[2*i],y:out.data64F[2*i+1]}));
    const resized=corners.map(p=>({x:p.x/2,y:p.y/2}));
    const restored=L.pointsToVideo(resized,1280,720,640,360);
-   const p=L.solve(cv,restored,mm,calibration);
+   const options=L.minEdge(restored)<12?{minEdgePx:6,maxRmsPx:6}:{};
+   if(L.minEdge(restored)<12)assert.throws(()=>L.solve(cv,restored,mm,calibration),/标记过小/);
+   const p=L.solve(cv,restored,mm,calibration,options);
    assert.ok(Math.abs(p.distanceM-Math.hypot(.08,.03,z))<1e-5);
    assert.ok(p.rmsPx<1e-5);
-   const rotated=[...restored.slice(1),restored[0]],q=L.solve(cv,rotated,mm,calibration);
+   const rotated=[...restored.slice(1),restored[0]],q=L.solve(cv,rotated,mm,calibration,options);
    assert.ok(Math.abs(q.distanceM-p.distanceM)<1e-5);
   }finally{mats.forEach(m=>m.delete());}
  }
@@ -33,4 +35,43 @@ test('lab lifecycle clears lost measurements and releases camera on hide',()=>{
  vm.runInContext('stream={getTracks:()=>[track]}; detector={detect:()=>[]}; current={distanceM:1}; scan(200)',ctx);
  assert.equal(vm.runInContext('current',ctx),null);assert.equal(element('pose').textContent,'当前无有效测距');
  ctx.document.hidden=true;handlers.visibilitychange();assert.equal(stopped,1);assert.equal(element('video').srcObject,null);
+ element('quality-mode').value='strict';element('quality-mode').onchange();
+ assert.equal(vm.runInContext('mode.enterPx',ctx),16);
+ assert.equal(vm.runInContext('current',ctx),null);
+ element('quality-mode').value='coarse';element('quality-mode').onchange();
+ assert.equal(vm.runInContext('mode.enterPx',ctx),8);
+});
+test('quality state machine uses hysteresis and three consecutive confirmations',()=>{
+ const q=L.createTracker();
+ assert.equal(q.step({edge:17,valid:true}).ready,false);
+ assert.equal(q.step({edge:17,valid:true}).ready,false);
+ assert.equal(q.step({edge:17,valid:true}).ready,true);
+ for(const edge of [12.1,15.8,12.2,13,16])assert.equal(q.step({edge,valid:true}).ready,true);
+ assert.deepEqual(q.step({edge:11.8,valid:false}),{state:'recovering',ready:false});
+ for(let i=0;i<5;i++){
+  assert.equal(q.step({edge:16.5,valid:true}).ready,false);
+  assert.equal(q.step({edge:11.9,valid:false}).state,'recovering');
+ }
+ q.step({edge:11,valid:false});assert.equal(q.step({edge:11,valid:false}).state,'tooSmall');
+ assert.equal(q.step({edge:17,valid:true}).state,'tooSmall');
+ assert.equal(q.step({edge:17,valid:true}).ready,false);
+ assert.equal(q.step({edge:17,valid:true}).ready,true);
+ assert.deepEqual(q.step({lost:true}),{state:'idle',ready:false});
+ assert.equal(q.step({edge:17,valid:true}).ready,false);
+});
+test('quality state never holds an invalid frame as a live distance',()=>{
+ const q=L.createTracker();for(let i=0;i<3;i++)q.step({edge:30,valid:true});
+ assert.equal(q.step({edge:30,valid:false}).ready,false);
+ q.reset();for(let i=0;i<6;i++)assert.equal(q.step({edge:13,valid:true}).ready,false);
+});
+test('coarse mode accepts smaller markers, holds to 6 px and still confirms recovery',()=>{
+ const q=L.createTracker(L.MODES.coarse);
+ assert.equal(q.step({edge:8,valid:true}).ready,false);
+ assert.equal(q.step({edge:8,valid:true}).ready,false);
+ assert.equal(q.step({edge:8,valid:true}).ready,true);
+ for(const edge of [6,7,8,6.1])assert.equal(q.step({edge,valid:true}).ready,true);
+ assert.equal(q.step({edge:5.9,valid:false}).ready,false);
+ assert.equal(q.step({edge:8,valid:true}).ready,false);
+ assert.equal(q.step({edge:8,valid:true}).ready,false);
+ assert.equal(q.step({edge:8,valid:true}).ready,true);
 });

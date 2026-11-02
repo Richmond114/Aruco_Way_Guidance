@@ -4,6 +4,7 @@
 <p>所有照片与记录仅保存在当前页面内存中，不自动上传。关闭或刷新前请下载。依赖库仍需联网加载。</p>
 <section><button id="start">开始</button><button id="stop">停止</button><p id="status" role="status">等待启动；需要 HTTPS 或 localhost</p>
 <div class="view"><video id="video" autoplay playsinline muted></video><canvas id="overlay" class="overlay"></canvas></div>
+<label>检测图像最大宽度（更高分辨率可能降低更新率）<select id="detect-width"><option value="640">640 px（省性能）</option><option value="960" selected>960 px</option><option value="1280">1280 px</option></select></label>
 <p id="stats">视频 —；检测 —；更新率 —</p><pre id="corners">未识别</pre></section>
 <section><h2>1. 标定图片采集</h2><a href="calibration_board.png" download>下载 A4 横向棋盘格</a>
 <p>9×6 个内角点，10×7 个方格；方格边长 20 mm。按实际大小 100% 打印，不适应页面，打印后用直尺确认并平贴硬板。内角点数量不是方格数量。</p>
@@ -12,7 +13,9 @@
 <section><h2>2. 导入标定与测距</h2><label>标定 JSON <input id="calibration" type="file" accept=".json,application/json"></label><p id="cal-status">没有有效标定，不输出米制距离</p>
 <label>ArUco 黑色正方形外框边长（mm，不含白边）<input id="size" type="number" value="50" min="10" max="2000"></label>
 <label>测量 ID（多个标记时手动选定）<select id="target"><option value="">请选择 ID</option></select></label>
-<pre id="pose" role="status">当前无有效测距</pre><p>距离为相机光学中心到标记中心的三维斜距 ‖t‖，不是 t 的 z 分量，不是脚下地面距离或楼层全局位置。未平滑；单平面可能存在双解，本页不能保证消除歧义，低像素误差也不保证物理准确。</p></section>
+<label>测距模式<select id="quality-mode"><option value="coarse" selected>粗略测距（默认，较宽松）</option><option value="strict">较严格测距（原阈值）</option></select></label>
+<p id="size-quality">像素尺寸：尚未检测目标</p>
+<pre id="pose" role="status">当前无有效测距</pre><p>绿色框表示成功识别 ID，不等于通过测距质量检查。粗略模式：最短边 ≥8 原视频像素可进入，≥6 像素保持，重投影 RMS 上限 6 px；较严格模式：进入 ≥16、保持 ≥12 像素，RMS 上限 3 px。两种模式均需连续 3 次合格才能进入。短暂失败会重新确认，不显示旧距离。粗略模式允许更小标记，但距离误差、跳变可能更大；阈值不保证精度，请以卷尺核对。</p><p>距离为相机光学中心到标记中心的三维斜距 ‖t‖，不是 t 的 z 分量，不是脚下地面距离或楼层全局位置。未平滑；单平面可能存在双解，本页不能保证消除歧义，低像素误差也不保证物理准确。</p></section>
 <section><h2>3. 独立实验记录</h2><label>卷尺参考斜距（米）<input id="reference" type="number" step="0.01" min="0.01"></label><button id="record">记录一次测量</button><button id="export">导出记录 JSON</button><p id="record-status">0 次；每次请重新布置手机并手动记录，连续帧不是独立实验。</p></section>
 <script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/cv.js" onerror="document.getElementById('status').textContent='识别库加载失败'"></script>
 <script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/aruco.js" onerror="document.getElementById('status').textContent='识别库加载失败'"></script>

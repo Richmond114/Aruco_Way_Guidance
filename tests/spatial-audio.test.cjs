@@ -44,6 +44,7 @@ function setup({audio=true,speech=true,resumeFails=false,camera}={}) {
     context.speechSynthesis={cancel(){},speak(utterance){spoken.push(utterance);}};}
   context.window=context;
   context.MarkerPose=require('../pose.js');
+  context.LabPose=require('../lab-pose.js');
   element('marker-mm').value='50';element('camera-fov').value='60';
   vm.createContext(context);vm.runInContext(script,context);
   return {run:code=>vm.runInContext(code,context),element,spoken,sources,panners,timers,
@@ -173,7 +174,7 @@ test('pose display uses the configured physical size and rejects stale or lost r
   const app=setup();
   app.element('camera-intrinsics').value=JSON.stringify({width:480,height:360,fx:500,fy:500,cx:240,cy:180});
   const marker={id:1,corners:[{x:215,y:155},{x:265,y:155},{x:265,y:205},{x:215,y:205}]};
-  app.run(`updatePose(${JSON.stringify(marker)},480,360)`);
+  app.run(`for(let i=0;i<3;i++)updatePose(${JSON.stringify(marker)},480,360)`);
   assert.match(app.element('pose-result').textContent,/0.50 米/);
   assert.match(app.element('pose-result').textContent,/倾斜角约 0 度/);
   app.advance(1001);
@@ -191,4 +192,19 @@ test('invalid intrinsics and size changes clear measurements without stopping na
   assert.match(app.element('pose-result').textContent,/设置已更新/);
   app.run('stop()');
   assert.match(app.element('pose-result').textContent,/测量已清除/);
+});
+test('normal-page loose mode confirms a small marker, switching mode clears its reading',()=>{
+  const app=setup();
+  app.element('camera-intrinsics').value=JSON.stringify({width:480,height:360,fx:500,fy:500,cx:240,cy:180});
+  const marker={id:1,corners:[{x:236.625,y:176.625},{x:243.375,y:176.625},{x:243.375,y:183.375},{x:236.625,y:183.375}]};
+  const update=`updatePose(${JSON.stringify(marker)},480,360)`;
+  app.run(update);assert.equal(app.run('latestPose'),null);
+  app.run(update);assert.equal(app.run('latestPose'),null);
+  app.run(update);assert.match(app.element('pose-result').textContent,/粗略测距/);
+  assert.ok(app.run('latestPose.distanceM')>0);
+  app.element('normal-quality').value='strict';app.element('normal-quality').change();
+  assert.equal(app.run('latestPose'),null);
+  for(let i=0;i<3;i++)app.run(update);
+  assert.equal(app.run('latestPose'),null);
+  assert.match(app.element('pose-result').textContent,/像素尺寸不足/);
 });

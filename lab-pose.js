@@ -11,10 +11,39 @@ function validate(c,w,h){
 }
 function pointsToVideo(corners,vw,vh,dw,dh){return corners.map(p=>({x:p.x*vw/dw,y:p.y*vh/dh}));}
 function objectPoints(mm){const s=mm/2000;return [-s,s,0,s,s,0,s,-s,0,-s,-s,0];}
-function solve(cv,corners,mm,c){
+function minEdge(corners){return Math.min(...corners.map((p,i)=>Math.hypot(p.x-corners[(i+1)%4].x,p.y-corners[(i+1)%4].y)));}
+// Only current valid observations can be recorded; this stabilizes status, not distance.
+const MODES={coarse:{label:'粗略测距',enterPx:8,holdPx:6,maxRmsPx:6},strict:{label:'较严格测距',enterPx:16,holdPx:12,maxRmsPx:3}};
+function createTracker({enterPx=16,holdPx=12}={}){
+ let state='idle',good=0,bad=0,failure='';
+ return {
+  reset(){state='idle';good=bad=0;failure='';},
+  step({edge=0,valid=false,lost=false}={}){
+   if(lost){this.reset();return {state,ready:false};}
+   const holding=state==='tracking'&&valid&&edge>=holdPx;
+   if(holding){good=bad=0;failure='';return {state,ready:true};}
+   if(valid&&edge>=enterPx){
+    bad=0;failure='';good++;
+    if(good>=3){state='tracking';good=0;return {state,ready:true};}
+    // Keep a latched failure message until enough good observations arrive.
+    if(state==='idle')state='acquiring';
+    else if(state==='tracking')state='recovering';
+   }else{
+    good=0;
+    const reason=edge<enterPx?'tooSmall':'unstable';
+    bad=reason===failure?bad+1:1;failure=reason;
+    if(state==='tracking')state='recovering';
+    if(state==='idle')state='acquiring';
+    if(bad>=3)state=reason;
+   }
+   return {state,ready:false};
+  }
+ };
+}
+function solve(cv,corners,mm,c,{minEdgePx=12,maxRmsPx=3}={}){
  if(!Number.isFinite(mm)||mm<10||mm>2000)throw Error('码体边长需为 10–2000 mm');
  if(corners.length!==4||!corners.every(p=>Number.isFinite(p.x)&&Number.isFinite(p.y)))throw Error('四角无效');
- if(corners.some((p,i)=>Math.hypot(p.x-corners[(i+1)%4].x,p.y-corners[(i+1)%4].y)<12))throw Error('标记过小');
+ if(corners.some((p,i)=>Math.hypot(p.x-corners[(i+1)%4].x,p.y-corners[(i+1)%4].y)<minEdgePx))throw Error('标记过小');
  const turns=corners.map((p,i)=>{const q=corners[(i+1)%4],r=corners[(i+2)%4];return(q.x-p.x)*(r.y-q.y)-(q.y-p.y)*(r.x-q.x);});
  if(!turns.every(v=>v>0)&&!turns.every(v=>v<0))throw Error('角点不构成有序凸四边形');
  const mats=[];const mat=(r,col,type,data)=>{const m=cv.matFromArray(r,col,type,data);mats.push(m);return m;};
@@ -30,9 +59,9 @@ function solve(cv,corners,mm,c){
  const pp=pred.data64F;let error=0;
  corners.forEach((p,i)=>error+=(p.x-pp[2*i])**2+(p.y-pp[2*i+1])**2);
  const rms=Math.sqrt(error/4),distanceM=Math.hypot(...tr);
- if(!Number.isFinite(distanceM)||distanceM<=0||distanceM>100||!Number.isFinite(rms)||rms>3)throw Error('结果异常或重投影误差超过 3 px');
+ if(!Number.isFinite(distanceM)||distanceM<=0||distanceM>100||!Number.isFinite(rms)||rms>maxRmsPx)throw Error(`结果异常或重投影误差超过 ${maxRmsPx} px`);
  return {distanceM,tvec:tr,rvec:rot,rmsPx:rms,solver:'IPPE_SQUARE',ambiguity:'单平面可能存在双解；本构建仅返回首选解，未消除歧义',smoothed:false};
  }finally{mats.forEach(m=>m.delete());}
 }
-const api={validate,pointsToVideo,objectPoints,solve};if(typeof module!=='undefined')module.exports=api;else root.LabPose=api;
+const api={validate,pointsToVideo,objectPoints,solve,minEdge,createTracker,MODES};if(typeof module!=='undefined')module.exports=api;else root.LabPose=api;
 })(typeof window==='undefined'?globalThis:window);

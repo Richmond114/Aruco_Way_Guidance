@@ -24,7 +24,7 @@ button {border:0; border-radius:13px; padding:15px 18px; font:inherit; font-weig
 button:focus-visible {outline:3px solid #fff; outline-offset:3px}
 button:disabled {opacity:.55; cursor:default}
 .audio-tests {flex-wrap:wrap}
-input, textarea {font:inherit; background:#0d1422; color:#fff; border:1px solid #adc1e5; padding:10px; border-radius:8px; max-width:100%;}
+input, textarea, select {font:inherit; background:#0d1422; color:#fff; border:1px solid #adc1e5; padding:10px; border-radius:8px; max-width:100%;}
 label {display:block; margin:12px 0; line-height:1.7}
 textarea {width:100%}
 .panel {background:#1a2940; border:1px solid #324a6c; padding:20px; border-radius:18px; margin-top:16px;}
@@ -57,6 +57,10 @@ small {color:#a2b5d2; line-height:1.8; display:block; margin-top:20px}
 </section>
 <section class="panel" aria-labelledby="pose-heading">
  <div class="eyebrow" id="pose-heading">距离与平面角度（实验估计）</div>
+ <label>测距模式
+  <select id="normal-quality"><option value="coarse" selected>宽松测距（默认）</option><option value="strict">较严格测距</option></select>
+ </label>
+ <p class="note">宽松模式允许更小的标记，距离和角度可能有较大误差；保留连续确认与防抖。未输入内参时仍为未标定粗估。</p>
  <label>当前测试标记黑色本体边长（毫米，不含白边及裁剪框）
   <input id="marker-mm" type="number" min="10" max="2000" value="50" step="1">
  </label>
@@ -89,6 +93,7 @@ small {color:#a2b5d2; line-height:1.8; display:block; margin-top:20px}
 <script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/cv.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/aruco.js"></script>
 <script src="pose.js"></script>
+<script src="lab-pose.js"></script>
 <script>
 'use strict';
 // 与 Python 脚本使用的 DICT_ARUCO_ORIGINAL 对应。
@@ -113,7 +118,9 @@ let audioContext = null, toneBuffer = null, activeTone = null, playback = 0;
 let spatialStatus = '空间音频尚未启用', speechStatus = '';
 const DIRECTIONS = {left: '请左转。', right: '请右转。'};
 let latestPose=null;
+let normalQuality=window.LabPose?.MODES.coarse,normalTracker=window.LabPose?.createTracker(normalQuality);
 function clearPose(message='未检测到可测量的标记') {
+  normalTracker?.reset();
   latestPose=null; $('pose-result').textContent=message;
 }
 function poseText() {
@@ -124,7 +131,7 @@ function poseText() {
     `光轴与标记平面夹角约 ${Math.round(p.axisPlaneDeg)} 度。`;
 }
 function updatePose(marker,w,h) {
-  if(!window.MarkerPose) {clearPose('姿态模块加载失败');return;}
+  if(!window.MarkerPose || !normalTracker) {clearPose('姿态模块加载失败，请检查 pose.js 和 lab-pose.js');return;}
   if(!marker) {clearPose();return;}
   try {
     // 可在 LOCATIONS 中为不同安装标记设置 sizeMm，否则使用页面的测试尺寸。
@@ -146,9 +153,20 @@ function updatePose(marker,w,h) {
       const f=w/(2*Math.tan(fov*Math.PI/360));
       k={fx:f,fy:f,cx:w/2,cy:h/2};mode='未标定粗估';
     }
-    const pose=MarkerPose.estimate(marker.corners,mm/1000,k);
-    if(!pose) {clearPose('标记太小、过于倾斜或角点不稳定，请靠近并对准');return;}
-    latestPose={...pose,id:marker.id,mode,time:Date.now()};
+    // Restore corners and intrinsics to actual video pixels before applying thresholds.
+    const vw=video.videoWidth||w,vh=video.videoHeight||h;
+    const rawCorners=LabPose.pointsToVideo(marker.corners,vw,vh,w,h);
+    k={fx:k.fx*vw/w,fy:k.fy*vh/h,cx:k.cx*vw/w,cy:k.cy*vh/h};
+    const edge=LabPose.minEdge(rawCorners);
+    const pose=MarkerPose.estimate(rawCorners,mm/1000,k,{minEdgePx:normalQuality.holdPx,maxRmsPx:normalQuality.maxRmsPx});
+    const quality=normalTracker.step({edge,valid:!!pose});
+    if(!quality.ready) {
+      latestPose=null;
+      const messages={acquiring:'正在确认测距质量',recovering:'测距暂不稳定，正在重新确认',tooSmall:'标记像素尺寸不足，请靠近或减少倾斜',unstable:'角点或姿态不稳定，请保持画面清晰'};
+      $('pose-result').textContent=`${messages[quality.state]||'当前无有效测距'}；当前无有效距离。${normalQuality.label}，最短边 ${edge.toFixed(1)} 原视频 px（进入 ${normalQuality.enterPx} / 保持 ${normalQuality.holdPx} px）。`;
+      return;
+    }
+    latestPose={...pose,id:marker.id,mode:normalQuality.label+'，'+mode,time:Date.now()};
     $('pose-result').textContent=poseText();
   } catch(e) {clearPose('测量设置无效：'+e.message);}
 }
@@ -365,6 +383,11 @@ $('start').addEventListener('click',start);
 $('stop').addEventListener('click',stop);
 $('read-pose').addEventListener('click',()=>void promptLocation({message:poseText()}));
 ['marker-mm','camera-fov','camera-intrinsics'].forEach(id=>$(id).addEventListener('input',()=>clearPose('设置已更新，等待重新测量')));
+$('normal-quality').addEventListener('change',()=>{
+  if(!window.LabPose)return;
+  normalQuality=LabPose.MODES[$('normal-quality').value]||LabPose.MODES.coarse;
+  normalTracker=LabPose.createTracker(normalQuality);clearPose('模式已切换，等待连续 3 次合格测量');
+});
 document.addEventListener('visibilitychange',()=>{if(document.hidden)clearPose('页面已隐藏，请返回后重新测量');});
 $('repeat').addEventListener('click',()=>void promptLocation(
   currentId===null ? {message:'尚未识别到位置。'} : LOCATIONS[currentId],true));

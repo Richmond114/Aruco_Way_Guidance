@@ -17,11 +17,11 @@
     }
     return a.map(row=>row[8]);
   }
-  function estimate(corners,sizeM,k) {
+  function estimate(corners,sizeM,k,{minEdgePx=12,maxRmsPx=3}={}) {
     if(!k || ![sizeM,k.fx,k.fy].every(v=>Number.isFinite(v)&&v>0) ||
        ![k.cx,k.cy].every(Number.isFinite) || corners?.length!==4 ||
        !corners.every(p=>Number.isFinite(p.x)&&Number.isFinite(p.y))) return null;
-    if(corners.some((p,i)=>Math.hypot(p.x-corners[(i+1)%4].x,p.y-corners[(i+1)%4].y)<12)) return null;
+    if(corners.some((p,i)=>Math.hypot(p.x-corners[(i+1)%4].x,p.y-corners[(i+1)%4].y)<minEdgePx)) return null;
     const turns=corners.map((p,i)=>{
       const q=corners[(i+1)%4],r=corners[(i+2)%4];
       return (q.x-p.x)*(r.y-q.y)-(q.y-p.y)*(r.x-q.x);
@@ -45,7 +45,7 @@
       error+=(k.fx*p[0]/p[2]+k.cx-corners[i].x)**2+(k.fy*p[1]/p[2]+k.cy-corners[i].y)**2;
     }
     const rms=Math.sqrt(error/4),tiltDeg=Math.acos(Math.min(1,Math.abs(normal[2])))*180/Math.PI;
-    if(!Number.isFinite(rms)||rms>3||tiltDeg>85) return null;
+    if(!Number.isFinite(rms)||rms>maxRmsPx||tiltDeg>85) return null;
     return {distanceM:norm(t),planeDistanceM:Math.abs(dot(t,normal)),tiltDeg,
       axisPlaneDeg:90-tiltDeg,reprojectionPx:rms,translation:t};
   }

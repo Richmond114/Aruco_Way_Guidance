@@ -35,3 +35,9 @@ test('degenerate, tiny, invalid, and non-convex detections are rejected',()=>{
   const c=project(.05,0,[0,0,.5]);[c[1],c[2]]=[c[2],c[1]];
   assert.equal(estimate(c,.05,k),null);
 });
+test('normal-page homography accepts small markers only with loose thresholds',()=>{
+  const corners=project(.03,0,[0,0,2]); // about nine pixels per side
+  assert.equal(estimate(corners,.03,k),null);
+  const p=estimate(corners,.03,k,{minEdgePx:6,maxRmsPx:6});
+  assert.ok(p);assert.ok(Math.abs(p.distanceM-2)<1e-8);
+});
