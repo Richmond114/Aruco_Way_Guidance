@@ -13,12 +13,14 @@
 <section><h2>2. 导入标定与测距</h2><label>标定 JSON <input id="calibration" type="file" accept=".json,application/json"></label><p id="cal-status">没有有效标定，不输出米制距离</p>
 <label>ArUco 黑色正方形外框边长（mm，不含白边）<input id="size" type="number" value="50" min="10" max="2000"></label>
 <label>测量 ID（多个标记时手动选定）<select id="target"><option value="">请选择 ID</option></select></label>
-<label>测距模式<select id="quality-mode"><option value="coarse" selected>粗略测距（默认，较宽松）</option><option value="strict">较严格测距（原阈值）</option></select></label>
+<label>测距模式<select id="quality-mode"><option value="relaxed" selected>超宽松粗估（默认）</option><option value="coarse">粗略测距</option><option value="strict">较严格测距（原阈值）</option></select></label>
+<label>数值更新<select id="display-interval"><option value="1000" selected>每 1 秒汇总（默认）</option><option value="2000">每 2 秒汇总</option><option value="0">实时原始值</option></select></label>
+<details><summary>实时原始测量详情</summary><pre id="raw-pose">等待测量</pre></details>
 <p id="size-quality">像素尺寸：尚未检测目标</p>
-<pre id="pose" role="status">当前无有效测距</pre><p>绿色框表示成功识别 ID，不等于通过测距质量检查。粗略模式：最短边 ≥8 原视频像素可进入，≥6 像素保持，重投影 RMS 上限 6 px；较严格模式：进入 ≥16、保持 ≥12 像素，RMS 上限 3 px。两种模式均需连续 3 次合格才能进入。短暂失败会重新确认，不显示旧距离。粗略模式允许更小标记，但距离误差、跳变可能更大；阈值不保证精度，请以卷尺核对。</p><p>距离为相机光学中心到标记中心的三维斜距 ‖t‖，不是 t 的 z 分量，不是脚下地面距离或楼层全局位置。未平滑；单平面可能存在双解，本页不能保证消除歧义，低像素误差也不保证物理准确。</p></section>
+<pre id="pose" role="status">当前无有效测距</pre><p>绿色框表示成功识别 ID，不等于通过测距质量检查。粗略模式：最短边 ≥8 原视频像素可进入，≥6 像素保持，重投影 RMS 上限 6 px；较严格模式：进入 ≥16、保持 ≥12 像素，RMS 上限 3 px。默认超宽松模式：进入 ≥4、保持 ≥3 像素，RMS 上限 12 px，成功求解即显示；其他模式需连续 3 次合格进入。短暂失败会重新确认，不显示旧距离。粗略模式允许更小标记，但距离误差、跳变可能更大；阈值不保证精度，请以卷尺核对。</p><p>距离为相机光学中心到标记中心的三维斜距 ‖t‖，不是 t 的 z 分量，不是脚下地面距离或楼层全局位置。未平滑；单平面可能存在双解，本页不能保证消除歧义，低像素误差也不保证物理准确。</p></section>
 <section><h2>3. 独立实验记录</h2><label>卷尺参考斜距（米）<input id="reference" type="number" step="0.01" min="0.01"></label><button id="record">记录一次测量</button><button id="export">导出记录 JSON</button><p id="record-status">0 次；每次请重新布置手机并手动记录，连续帧不是独立实验。</p></section>
 <script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/cv.js" onerror="document.getElementById('status').textContent='识别库加载失败'"></script>
 <script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/aruco.js" onerror="document.getElementById('status').textContent='识别库加载失败'"></script>
-<script src="lab-pose.js"></script><script src="lab.js"></script>
+<script src="lab-pose.js"></script><script src="measurement-display.js"></script><script src="lab.js"></script>
 <script async src="https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.10.0-release.1/dist/opencv.js" onload="if(window.cv &amp;&amp; typeof cv.then==='function')cv.then(m=>window.cv=m)" onerror="document.getElementById('cal-status').textContent='OpenCV.js 加载失败，无法测距；仍可采集'"></script></html>
 

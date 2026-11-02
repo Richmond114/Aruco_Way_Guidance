@@ -13,8 +13,8 @@ function pointsToVideo(corners,vw,vh,dw,dh){return corners.map(p=>({x:p.x*vw/dw,
 function objectPoints(mm){const s=mm/2000;return [-s,s,0,s,s,0,s,-s,0,-s,-s,0];}
 function minEdge(corners){return Math.min(...corners.map((p,i)=>Math.hypot(p.x-corners[(i+1)%4].x,p.y-corners[(i+1)%4].y)));}
 // Only current valid observations can be recorded; this stabilizes status, not distance.
-const MODES={coarse:{label:'粗略测距',enterPx:8,holdPx:6,maxRmsPx:6},strict:{label:'较严格测距',enterPx:16,holdPx:12,maxRmsPx:3}};
-function createTracker({enterPx=16,holdPx=12}={}){
+const MODES={relaxed:{label:'超宽松粗估',enterPx:4,holdPx:3,maxRmsPx:12,confirmFrames:1,maxLengthSkew:.8,maxNonOrth:.95,maxTiltDeg:89.8},coarse:{label:'粗略测距',enterPx:8,holdPx:6,maxRmsPx:6},strict:{label:'较严格测距',enterPx:16,holdPx:12,maxRmsPx:3}};
+function createTracker({enterPx=16,holdPx=12,confirmFrames=3}={}){
  let state='idle',good=0,bad=0,failure='';
  return {
   reset(){state='idle';good=bad=0;failure='';},
@@ -24,7 +24,7 @@ function createTracker({enterPx=16,holdPx=12}={}){
    if(holding){good=bad=0;failure='';return {state,ready:true};}
    if(valid&&edge>=enterPx){
     bad=0;failure='';good++;
-    if(good>=3){state='tracking';good=0;return {state,ready:true};}
+    if(good>=confirmFrames){state='tracking';good=0;return {state,ready:true};}
     // Keep a latched failure message until enough good observations arrive.
     if(state==='idle')state='acquiring';
     else if(state==='tracking')state='recovering';

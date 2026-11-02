@@ -58,9 +58,9 @@ small {color:#a2b5d2; line-height:1.8; display:block; margin-top:20px}
 <section class="panel" aria-labelledby="pose-heading">
  <div class="eyebrow" id="pose-heading">距离与平面角度（实验估计）</div>
  <label>测距模式
-  <select id="normal-quality"><option value="coarse" selected>宽松测距（默认）</option><option value="strict">较严格测距</option></select>
+  <select id="normal-quality"><option value="relaxed" selected>超宽松粗估（默认）</option><option value="coarse">宽松测距</option><option value="strict">较严格测距</option></select>
  </label>
- <p class="note">宽松模式允许更小的标记，距离和角度可能有较大误差；保留连续确认与防抖。未输入内参时仍为未标定粗估。</p>
+ <p class="note">默认超宽松粗估：成功求解即显示，最短边进入 4 px、保持 3 px；同时放宽角点形状和倾角限制。未输入内参时为视场角粗估。</p>
  <label>当前测试标记黑色本体边长（毫米，不含白边及裁剪框）
   <input id="marker-mm" type="number" min="10" max="2000" value="50" step="1">
  </label>
@@ -73,6 +73,8 @@ small {color:#a2b5d2; line-height:1.8; display:block; margin-top:20px}
    <textarea id="camera-intrinsics" rows="4" placeholder='{"width":1280,"height":720,"fx":1100,"fy":1100,"cx":640,"cy":360}'></textarea>
   </label>
  </details>
+ <label>数值更新<select id="normal-interval"><option value="1000" selected>每 1 秒汇总（默认）</option><option value="2000">每 2 秒汇总</option><option value="0">实时原始值</option></select></label>
+ <details><summary>实时原始测量详情</summary><pre id="normal-raw">等待测量</pre></details>
  <div id="pose-result" class="note">尚未测量；请先设置实际边长，再开始识别。</div>
  <button class="secondary" id="read-pose">播报当前距离与角度</button>
  <p class="note">正对标记时倾斜角为 0°，摄像头光轴与标记平面的夹角为 90°。测量参考点是摄像头，不是人体或手机外壳。切换打印尺寸时请修改边长；同一个 ID 无法区分不同物理尺寸。</p>
@@ -94,6 +96,7 @@ small {color:#a2b5d2; line-height:1.8; display:block; margin-top:20px}
 <script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/aruco.js"></script>
 <script src="pose.js"></script>
 <script src="lab-pose.js"></script>
+<script src="measurement-display.js"></script>
 <script>
 'use strict';
 // 与 Python 脚本使用的 DICT_ARUCO_ORIGINAL 对应。
@@ -118,21 +121,36 @@ let audioContext = null, toneBuffer = null, activeTone = null, playback = 0;
 let spatialStatus = '空间音频尚未启用', speechStatus = '';
 const DIRECTIONS = {left: '请左转。', right: '请右转。'};
 let latestPose=null;
-let normalQuality=window.LabPose?.MODES.coarse,normalTracker=window.LabPose?.createTracker(normalQuality);
-function clearPose(message='未检测到可测量的标记') {
-  normalTracker?.reset();
-  latestPose=null; $('pose-result').textContent=message;
+let normalQuality=window.LabPose?.MODES.relaxed,normalTracker=window.LabPose?.createTracker(normalQuality);
+const normalDisplay=MeasurementDisplay.create({freshMs:1000,now:()=>performance.now()});
+let poseWaitingText='等待测量';
+function clearPose(message='等待测量',retain=false) {
+  normalTracker?.reset();latestPose=null;
+  poseWaitingText=retain?'等待测量':message;
+  if(retain)normalDisplay.fail();else normalDisplay.reset();
+  renderNormalPose();
 }
 function poseText() {
-  if(!latestPose || Date.now()-latestPose.time>1000) return '当前没有有效距离和角度，请对准标记重新测量。';
-  const p=latestPose;
-  return `标记 ID ${p.id}，${p.mode}。距标记中心约 ${p.distanceM.toFixed(2)} 米，`+
-    `距标记平面约 ${p.planeDistanceM.toFixed(2)} 米。倾斜角约 ${Math.round(p.tiltDeg)} 度，`+
+  const view=normalDisplay.read(),s=view.summary;
+  if(!s)return '当前没有有效距离和角度，请对准标记重新测量。';
+  const p=s.representative;
+  const label=s.intervalMs?`${s.intervalMs/1000} 秒汇总，中位距离`:'实时原始距离';
+  const prefix=view.historical?`上次测量，时间 ${s.windowEndTime}。`:'';
+  return `${prefix}标记 ID ${p.id}，${p.mode}。${label}约 ${s.distanceM.toFixed(2)} 米。`+
+    `对应样本距标记平面约 ${p.planeDistanceM.toFixed(2)} 米。倾斜角约 ${Math.round(p.tiltDeg)} 度，`+
     `光轴与标记平面夹角约 ${Math.round(p.axisPlaneDeg)} 度。`;
+}
+function renderNormalPose(){
+  const view=normalDisplay.read();
+  if(!view.raw)latestPose=null;
+  const text=view.summary?poseText():poseWaitingText;
+  if($('pose-result').textContent!==text)$('pose-result').textContent=text;
+  const p=view.raw;
+  $('normal-raw').textContent=p?`ID ${p.id}；原始斜距 ${p.distanceM.toFixed(4)} m；重投影 RMS ${p.reprojectionPx.toFixed(3)} px；时间 ${p.time}`:'当前无有效原始测量';
 }
 function updatePose(marker,w,h) {
   if(!window.MarkerPose || !normalTracker) {clearPose('姿态模块加载失败，请检查 pose.js 和 lab-pose.js');return;}
-  if(!marker) {clearPose();return;}
+  if(!marker) {clearPose('等待测量',true);return;}
   try {
     // 可在 LOCATIONS 中为不同安装标记设置 sizeMm，否则使用页面的测试尺寸。
     const mm=LOCATIONS[marker.id].sizeMm ?? Number($('marker-mm').value);
@@ -158,16 +176,17 @@ function updatePose(marker,w,h) {
     const rawCorners=LabPose.pointsToVideo(marker.corners,vw,vh,w,h);
     k={fx:k.fx*vw/w,fy:k.fy*vh/h,cx:k.cx*vw/w,cy:k.cy*vh/h};
     const edge=LabPose.minEdge(rawCorners);
-    const pose=MarkerPose.estimate(rawCorners,mm/1000,k,{minEdgePx:normalQuality.holdPx,maxRmsPx:normalQuality.maxRmsPx});
+    const contextKey=JSON.stringify([marker.id,mm,k,normalQuality,session,vw,vh,w,h]);
+    if(normalDisplay.context(contextKey))normalTracker.reset();
+    const pose=MarkerPose.estimate(rawCorners,mm/1000,k,{...normalQuality,minEdgePx:normalQuality.holdPx});
     const quality=normalTracker.step({edge,valid:!!pose});
     if(!quality.ready) {
       latestPose=null;
-      const messages={acquiring:'正在确认测距质量',recovering:'测距暂不稳定，正在重新确认',tooSmall:'标记像素尺寸不足，请靠近或减少倾斜',unstable:'角点或姿态不稳定，请保持画面清晰'};
-      $('pose-result').textContent=`${messages[quality.state]||'当前无有效测距'}；当前无有效距离。${normalQuality.label}，最短边 ${edge.toFixed(1)} 原视频 px（进入 ${normalQuality.enterPx} / 保持 ${normalQuality.holdPx} px）。`;
+      poseWaitingText='等待测量';normalDisplay.fail();renderNormalPose();
       return;
     }
-    latestPose={...pose,id:marker.id,mode:normalQuality.label+'，'+mode,time:Date.now()};
-    $('pose-result').textContent=poseText();
+    latestPose={...pose,id:marker.id,mode:normalQuality.label+'，'+mode,time:new Date().toISOString()};
+    normalDisplay.push(contextKey,latestPose);poseWaitingText='等待测量';renderNormalPose();
   } catch(e) {clearPose('测量设置无效：'+e.message);}
 }
 function status(s) { $('status').textContent=s; }
@@ -318,7 +337,7 @@ function announce(id) {
 function scan(t) {
   if (!stream) return;
   raf=requestAnimationFrame(scan);
-  if (video.readyState < 2) {clearPose('等待摄像头画面');return;}
+  if (video.readyState < 2) {clearPose('等待摄像头画面',true);return;}
   if (t-lastScan < 180) return;
   lastScan=t;
   const w=480, h=Math.max(1,Math.round(w*(video.videoHeight/video.videoWidth)));
@@ -326,7 +345,7 @@ function scan(t) {
   frameCtx.drawImage(video,0,0,w,h);
   let markers=[];
   try { markers=detector.detect(frameCtx.getImageData(0,0,w,h)); }
-  catch(e) {clearPose('识别失败，测量已失效');status('识别出现错误：'+e.message); return;}
+  catch(e) {clearPose('等待测量',true);status('识别出现错误：'+e.message); return;}
   ctx.clearRect(0,0,w,h);
   markers.forEach(m => {
     ctx.beginPath(); m.corners.forEach((c,i)=>i?ctx.lineTo(c.x,c.y):ctx.moveTo(c.x,c.y));ctx.closePath();
@@ -336,9 +355,9 @@ function scan(t) {
   });
   // 防误触：至少连续两次检测到同一个已登记 ID。
   const match=markers.find(m=>Object.prototype.hasOwnProperty.call(LOCATIONS,m.id));
-  if (!match) {clearPose();candidateId=null;candidateCount=0;return;}
+  if (!match) {clearPose('等待测量',true);candidateId=null;candidateCount=0;return;}
   if (candidateId===match.id) candidateCount++;else {candidateId=match.id;candidateCount=1;}
-  if(candidateCount>=2) updatePose(match,w,h); else clearPose('正在确认标记');
+  if(candidateCount>=2 || normalQuality?.confirmFrames===1) updatePose(match,w,h); else clearPose('正在确认标记');
   if (candidateCount>=2 && (currentId!==match.id || Date.now()-announcedAt > 30000)) {
      announce(match.id);
   }
@@ -381,14 +400,16 @@ function stop() {
 }
 $('start').addEventListener('click',start);
 $('stop').addEventListener('click',stop);
+$('normal-interval').addEventListener('change',()=>{normalDisplay.setInterval(Number($('normal-interval').value));clearPose('更新间隔已切换，等待测量');});
+setInterval(renderNormalPose,100);
 $('read-pose').addEventListener('click',()=>void promptLocation({message:poseText()}));
 ['marker-mm','camera-fov','camera-intrinsics'].forEach(id=>$(id).addEventListener('input',()=>clearPose('设置已更新，等待重新测量')));
 $('normal-quality').addEventListener('change',()=>{
   if(!window.LabPose)return;
-  normalQuality=LabPose.MODES[$('normal-quality').value]||LabPose.MODES.coarse;
-  normalTracker=LabPose.createTracker(normalQuality);clearPose('模式已切换，等待连续 3 次合格测量');
+  normalQuality=LabPose.MODES[$('normal-quality').value]||LabPose.MODES.relaxed;
+  normalTracker=LabPose.createTracker(normalQuality);clearPose('模式已切换，正在测距');
 });
-document.addEventListener('visibilitychange',()=>{if(document.hidden)clearPose('页面已隐藏，请返回后重新测量');});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)stop();});
 $('repeat').addEventListener('click',()=>void promptLocation(
   currentId===null ? {message:'尚未识别到位置。'} : LOCATIONS[currentId],true));
 $('test-left').addEventListener('click',()=>void testDirection('left'));

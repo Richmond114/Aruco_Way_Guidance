@@ -17,7 +17,7 @@
     }
     return a.map(row=>row[8]);
   }
-  function estimate(corners,sizeM,k,{minEdgePx=12,maxRmsPx=3}={}) {
+  function estimate(corners,sizeM,k,{minEdgePx=12,maxRmsPx=3,maxLengthSkew=.2,maxNonOrth=.25,maxTiltDeg=85}={}) {
     if(!k || ![sizeM,k.fx,k.fy].every(v=>Number.isFinite(v)&&v>0) ||
        ![k.cx,k.cy].every(Number.isFinite) || corners?.length!==4 ||
        !corners.every(p=>Number.isFinite(p.x)&&Number.isFinite(p.y))) return null;
@@ -34,7 +34,7 @@
     });
     const h=solve(a); if(!h) return null;
     const c1=[h[0],h[3],h[6]],c2=[h[1],h[4],h[7]],n1=norm(c1),n2=norm(c2);
-    if(Math.abs(n1-n2)/(n1+n2)>.2 || Math.abs(dot(c1,c2)/(n1*n2))>.25) return null;
+    if(Math.abs(n1-n2)/(n1+n2)>maxLengthSkew || Math.abs(dot(c1,c2)/(n1*n2))>maxNonOrth) return null;
     const r1=scale(c1,1/n1),orth=c2.map((v,i)=>v-dot(c2,r1)*r1[i]);
     const r2=scale(orth,1/norm(orth)),normal=cross(r1,r2);
     const t=scale([h[2],h[5],1],2*sizeM/(n1+n2));
@@ -45,7 +45,7 @@
       error+=(k.fx*p[0]/p[2]+k.cx-corners[i].x)**2+(k.fy*p[1]/p[2]+k.cy-corners[i].y)**2;
     }
     const rms=Math.sqrt(error/4),tiltDeg=Math.acos(Math.min(1,Math.abs(normal[2])))*180/Math.PI;
-    if(!Number.isFinite(rms)||rms>maxRmsPx||tiltDeg>85) return null;
+    if(!Number.isFinite(rms)||rms>maxRmsPx||tiltDeg>maxTiltDeg) return null;
     return {distanceM:norm(t),planeDistanceM:Math.abs(dot(t,normal)),tiltDeg,
       axisPlaneDeg:90-tiltDeg,reprojectionPx:rms,translation:t};
   }

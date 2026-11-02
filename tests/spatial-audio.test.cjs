@@ -35,7 +35,7 @@ function setup({audio=true,speech=true,resumeFails=false,camera}={}) {
   const context={document:{getElementById:element,createElement:()=>element('frame'),addEventListener(){}},
     navigator:{mediaDevices:{getUserMedia:camera || (async()=>({getTracks:()=>tracks}))}},
     AR:{Detector:class {detect(){return detected;}}},CV:{},
-    Date:{now:()=>clock},Math,Promise,Float32Array,
+    Date:class extends Date {constructor(...args){super(...(args.length?args:[clock]));}static now(){return clock;}},performance:{now:()=>clock},Math,Promise,Float32Array,setInterval(){},
     setTimeout(fn,delay){const id=++timerId;timers.set(id,{fn,delay});return id;},
     clearTimeout(id){timers.delete(id);},requestAnimationFrame:()=>1,cancelAnimationFrame(){},
     addEventListener(){}};
@@ -43,6 +43,7 @@ function setup({audio=true,speech=true,resumeFails=false,camera}={}) {
   if(speech){context.SpeechSynthesisUtterance=class {constructor(text){this.text=text;}};
     context.speechSynthesis={cancel(){},speak(utterance){spoken.push(utterance);}};}
   context.window=context;
+  context.MeasurementDisplay=require('../measurement-display.js');
   context.MarkerPose=require('../pose.js');
   context.LabPose=require('../lab-pose.js');
   element('marker-mm').value='50';element('camera-fov').value='60';
@@ -178,7 +179,8 @@ test('pose display uses the configured physical size and rejects stale or lost r
   assert.match(app.element('pose-result').textContent,/0.50 米/);
   assert.match(app.element('pose-result').textContent,/倾斜角约 0 度/);
   app.advance(1001);
-  assert.match(app.run('poseText()'),/没有有效距离/);
+  assert.match(app.run('poseText()'),/上次测量/);
+  app.advance(1000);assert.match(app.run('poseText()'),/没有有效距离/);
   app.run('updatePose(null,480,360)');
   assert.equal(app.run('latestPose'),null);
 });
@@ -195,6 +197,7 @@ test('invalid intrinsics and size changes clear measurements without stopping na
 });
 test('normal-page loose mode confirms a small marker, switching mode clears its reading',()=>{
   const app=setup();
+  app.element('normal-quality').value='coarse';app.element('normal-quality').change();
   app.element('camera-intrinsics').value=JSON.stringify({width:480,height:360,fx:500,fy:500,cx:240,cy:180});
   const marker={id:1,corners:[{x:236.625,y:176.625},{x:243.375,y:176.625},{x:243.375,y:183.375},{x:236.625,y:183.375}]};
   const update=`updatePose(${JSON.stringify(marker)},480,360)`;
@@ -206,5 +209,14 @@ test('normal-page loose mode confirms a small marker, switching mode clears its 
   assert.equal(app.run('latestPose'),null);
   for(let i=0;i<3;i++)app.run(update);
   assert.equal(app.run('latestPose'),null);
-  assert.match(app.element('pose-result').textContent,/像素尺寸不足/);
+  assert.match(app.element('pose-result').textContent,/等待测量/);
+});
+test('normal-page default relaxed mode displays a tiny solvable marker immediately',()=>{
+  const app=setup();
+  app.element('camera-intrinsics').value=JSON.stringify({width:480,height:360,fx:500,fy:500,cx:240,cy:180});
+  const marker={id:1,corners:[{x:238.3,y:178.3},{x:241.7,y:178.3},{x:241.7,y:181.7},{x:238.3,y:181.7}]};
+  app.run(`updatePose(${JSON.stringify(marker)},480,360)`);
+  assert.ok(app.run('latestPose.distanceM')>0);
+  assert.match(app.element('pose-result').textContent,/超宽松粗估/);
+  app.run('updatePose(null,480,360)');assert.equal(app.run('latestPose'),null);
 });

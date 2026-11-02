@@ -29,11 +29,11 @@ test('lab lifecycle clears lost measurements and releases camera on hide',()=>{
  const vm=require('node:vm'),fs=require('node:fs'),elements=new Map(),handlers={};let stopped=0;
  const pen={clearRect(){},drawImage(){},getImageData(){return {};}};
  const element=id=>{if(!elements.has(id))elements.set(id,{value:'',textContent:'',disabled:false,options:[],getContext:()=>pen,readyState:2,videoWidth:1280,videoHeight:720});return elements.get(id);};
- const ctx={document:{getElementById:element,createElement:()=>element('canvas'),addEventListener:(name,fn)=>handlers[name]=fn,hidden:false},LabPose:L,performance:{now:()=>1000},requestAnimationFrame:()=>1,cancelAnimationFrame(){},setInterval(){},setTimeout(){},console,Date,window:{addEventListener(){}}};
+ const ctx={document:{getElementById:element,createElement:()=>element('canvas'),addEventListener:(name,fn)=>handlers[name]=fn,hidden:false},LabPose:L,MeasurementDisplay:require('../measurement-display.js'),performance:{now:()=>1000},requestAnimationFrame:()=>1,cancelAnimationFrame(){},setInterval(){},setTimeout(){},console,Date,window:{addEventListener(){}}};
  vm.createContext(ctx);vm.runInContext(require('node:fs').readFileSync(require('node:path').join(__dirname,'../lab.js'),'utf8'),ctx);
  ctx.track={stop(){stopped++;}};
  vm.runInContext('stream={getTracks:()=>[track]}; detector={detect:()=>[]}; current={distanceM:1}; scan(200)',ctx);
- assert.equal(vm.runInContext('current',ctx),null);assert.equal(element('pose').textContent,'当前无有效测距');
+ assert.equal(vm.runInContext('current',ctx),null);assert.equal(element('pose').textContent,'等待测量');
  ctx.document.hidden=true;handlers.visibilitychange();assert.equal(stopped,1);assert.equal(element('video').srcObject,null);
  element('quality-mode').value='strict';element('quality-mode').onchange();
  assert.equal(vm.runInContext('mode.enterPx',ctx),16);
@@ -74,4 +74,12 @@ test('coarse mode accepts smaller markers, holds to 6 px and still confirms reco
  assert.equal(q.step({edge:8,valid:true}).ready,false);
  assert.equal(q.step({edge:8,valid:true}).ready,false);
  assert.equal(q.step({edge:8,valid:true}).ready,true);
+});
+test('relaxed mode displays the first solvable frame and recovers immediately',()=>{
+ const q=L.createTracker(L.MODES.relaxed);
+ assert.equal(q.step({edge:4,valid:true}).ready,true);
+ assert.equal(q.step({edge:3,valid:true}).ready,true);
+ assert.equal(q.step({edge:2.9,valid:false}).ready,false);
+ assert.equal(q.step({edge:4.1,valid:true}).ready,true);
+ assert.equal(q.step({lost:true}).ready,false);
 });

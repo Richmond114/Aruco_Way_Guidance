@@ -41,3 +41,10 @@ test('normal-page homography accepts small markers only with loose thresholds',(
   const p=estimate(corners,.03,k,{minEdgePx:6,maxRmsPx:6});
   assert.ok(p);assert.ok(Math.abs(p.distanceM-2)<1e-8);
 });
+test('relaxed normal-page mode also relaxes the hidden homography shape check',()=>{
+  const c=[{x:300,y:235},{x:340,y:235},{x:340,y:245},{x:300,y:245}];
+  assert.equal(estimate(c,.05,k,{minEdgePx:6,maxRmsPx:6}),null);
+  const options=require('../lab-pose.js').MODES.relaxed;
+  const p=estimate(c,.05,k,{...options,minEdgePx:options.holdPx});
+  assert.ok(p);assert.ok(Number.isFinite(p.distanceM));
+});
