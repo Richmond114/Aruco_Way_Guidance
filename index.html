@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>寻径 · 室内位置播报</title>
+<style>
+:root { color-scheme: dark; font-family: system-ui, -apple-system, 'Microsoft YaHei', sans-serif; }
+* { box-sizing: border-box; }
+body { background:#0d1422; color:#f1f5ff; margin:0; }
+main { max-width:600px; margin:auto; padding:24px 17px 56px; }
+h1 {font-size:29px; margin:12px 0 4px; letter-spacing:1px;}
+.subtitle {color:#adc1e5; font-size:15px; margin:0 0 20px}
+.view { position:relative; background:#172337; border:1px solid #344965; border-radius:20px; aspect-ratio:4/3; overflow:hidden; }
+video, canvas {position:absolute; inset:0; width:100%; height:100%; object-fit:contain;}
+video {background:#172337}
+canvas {pointer-events:none}
+.hint {position:absolute; inset:0; display:grid; place-items:center; text-align:center; padding:30px; color:#a4b7d7;}
+.view.active .hint {display:none}
+.bar {display:flex; align-items:center; justify-content:space-between; gap:10px; margin:16px 0}
+button {border:0; border-radius:13px; padding:15px 18px; font:inherit; font-weight:700; cursor:pointer}
+.primary {background:#8ec5ff; color:#071a2c; flex:1}
+.secondary {background:#263e61; color:#fff;}
+button:focus-visible {outline:3px solid #fff; outline-offset:3px}
+.panel {background:#1a2940; border:1px solid #324a6c; padding:20px; border-radius:18px; margin-top:16px;}
+.eyebrow {color:#a7c5eb; font-weight:650; font-size:14px}
+.place {font-size:28px; font-weight:750; margin:10px 0; min-height:36px;}
+.note {font-size:17px; line-height:1.7; color:#d7e7fd}
+.status {color:#b5c9e7; margin-top:10px; min-height:22px}
+small {color:#a2b5d2; line-height:1.8; display:block; margin-top:20px}
+</style>
+</head>
+<body><main>
+<h1>寻径 <span aria-hidden="true">↗</span></h1>
+<p class="subtitle">室内无障碍位置识别 · ArUco</p>
+<div class="view" id="view">
+  <video id="video" autoplay playsinline muted aria-label="实时摄像头画面"></video>
+  <canvas id="overlay" aria-hidden="true"></canvas>
+  <div class="hint">点击「开始识别」，将摄像头对准墙面或导向标识上的 ArUco 标记。</div>
+</div>
+<div class="bar">
+ <button class="primary" id="start">开始识别</button>
+ <button class="secondary" id="stop" disabled>停止</button>
+</div>
+<section class="panel" aria-live="polite" aria-atomic="true">
+ <div class="eyebrow">当前位置</div>
+ <div class="place" id="place">等待识别</div>
+ <div class="note" id="detail">请启动摄像头并对准标记。</div>
+ <div class="status" id="status" role="status">摄像头未启动</div>
+ <div class="bar"><button class="secondary" id="repeat">🔊 重播语音</button></div>
+</section>
+<small>演示说明：本应用仅在识别到已登记的标记后播报该标记的安装位置；不能自动探测障碍或保证实时定位。请在安全环境中测试，勿将其作为唯一出行辅助。</small>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/cv.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/aruco.js"></script>
+<script>
+'use strict';
+// 与 Python 脚本使用的 DICT_ARUCO_ORIGINAL 对应。
+const LOCATIONS = {
+  0: {name: '一楼入口', message: '您已到达教学楼一楼入口。'},
+  1: {name: '一楼电梯', message: '您目前位于一楼电梯附近。'},
+  2: {name: '一楼楼梯口', message: '您已到达一楼楼梯口，请注意台阶。'},
+  3: {name: '二楼主走廊', message: '您目前位于二楼主走廊。'},
+  4: {name: '二楼教室', message: '您已到达二楼教室门口。'}
+};
+const $ = id => document.getElementById(id);
+const video = $('video'), overlay = $('overlay');
+const ctx = overlay.getContext('2d', {willReadFrequently: true});
+const frame = document.createElement('canvas');
+const frameCtx = frame.getContext('2d', {willReadFrequently: true});
+let stream = null, detector = null, raf = null;
+let lastScan = 0, currentId = null, candidateId = null, candidateCount = 0, lastMessage = '';
+let announcedAt = 0;
+function status(s) { $('status').textContent=s; }
+function speak(message) {
+  lastMessage=message;
+  if (!('speechSynthesis' in window)) {status('浏览器不支持语音合成'); return;}
+  window.speechSynthesis.cancel();
+  const utterance=new SpeechSynthesisUtterance(message);
+  utterance.lang='zh-CN'; utterance.rate=0.92;
+  window.speechSynthesis.speak(utterance);
+}
+function announce(id) {
+  const item=LOCATIONS[id];
+  currentId=id; announcedAt=Date.now();
+  $('place').textContent=item.name;
+  $('detail').textContent=item.message;
+  status(`已识别标记 ID ${id}`);
+  speak(item.message);
+}
+function scan(t) {
+  if (!stream) return;
+  raf=requestAnimationFrame(scan);
+  if (t-lastScan < 180 || video.readyState < 2) return;
+  lastScan=t;
+  const w=480, h=Math.max(1,Math.round(w*(video.videoHeight/video.videoWidth)));
+  if (frame.width!==w || frame.height!==h) {frame.width=overlay.width=w; frame.height=overlay.height=h;}
+  frameCtx.drawImage(video,0,0,w,h);
+  let markers=[];
+  try { markers=detector.detect(frameCtx.getImageData(0,0,w,h)); }
+  catch(e) {status('识别出现错误：'+e.message); return;}
+  ctx.clearRect(0,0,w,h);
+  markers.forEach(m => {
+    ctx.beginPath(); m.corners.forEach((c,i)=>i?ctx.lineTo(c.x,c.y):ctx.moveTo(c.x,c.y));ctx.closePath();
+    ctx.lineWidth=3;ctx.strokeStyle='#8afbc2';ctx.stroke();
+    ctx.font='bold 22px sans-serif';ctx.fillStyle='#fff';
+    ctx.fillText('ID '+m.id,m.corners[0].x,m.corners[0].y-8);
+  });
+  // 防误触：至少连续两次检测到同一个已登记 ID。
+  const match=markers.find(m=>Object.prototype.hasOwnProperty.call(LOCATIONS,m.id));
+  if (!match) {candidateId=null;candidateCount=0;return;}
+  if (candidateId===match.id) candidateCount++;else {candidateId=match.id;candidateCount=1;}
+  if (candidateCount>=2 && (currentId!==match.id || Date.now()-announcedAt > 30000)) {
+     announce(match.id);
+  }
+}
+async function start() {
+  if(stream) return;
+  if(typeof AR==='undefined' || typeof CV==='undefined') {status('识别库加载失败，请检查网络连接');return;}
+  if (!navigator.mediaDevices?.getUserMedia) {status('需要 HTTPS 或 localhost 才能启用摄像头');return;}
+  try {
+    detector=new AR.Detector({dictionaryName:'ARUCO'});
+    stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}}});
+    video.srcObject=stream;await video.play();
+    $('view').classList.add('active');$('start').disabled=true;$('stop').disabled=false;
+    currentId=null;candidateId=null;candidateCount=0;status('摄像头已启动，正在寻找标记…');
+    speak('位置识别已开启，请缓慢移动手机，对准附近的标记。');
+    raf=requestAnimationFrame(scan);
+  } catch(e) {status('启动失败：'+e.message);stream=null;}
+}
+function stop() {
+  if(raf!==null)cancelAnimationFrame(raf); raf=null;
+  if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;
+  video.srcObject=null;ctx.clearRect(0,0,overlay.width,overlay.height);
+  $('view').classList.remove('active');$('start').disabled=false;$('stop').disabled=true;
+  window.speechSynthesis?.cancel();status('识别已停止');
+}
+$('start').addEventListener('click',start);
+$('stop').addEventListener('click',stop);
+$('repeat').addEventListener('click',()=>speak(lastMessage || '尚未识别到位置。'));
+window.addEventListener('pagehide',stop);
+</script>
+</body></html>
