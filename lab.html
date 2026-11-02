@@ -1,0 +1,21 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ArUco 测位实验</title>
+<style>body{font:17px system-ui;background:#0d1422;color:#f1f5ff;margin:auto;max-width:850px;padding:18px}a{color:#8ec5ff}section{background:#1a2940;padding:18px;margin:16px 0;border-radius:16px}button,input,select{font:inherit;padding:10px;margin:5px;max-width:95%}button{cursor:pointer}label{display:block}pre{white-space:pre-wrap;overflow-wrap:anywhere}.view{position:relative}video{width:100%;display:block}canvas.overlay{position:absolute;inset:0;width:100%;height:100%}img{max-width:160px}button:focus-visible,a:focus-visible{outline:3px solid #8ec5ff}</style>
+<a href="index.html">返回导览</a><h1>ArUco 测位实验</h1>
+<p>所有照片与记录仅保存在当前页面内存中，不自动上传。关闭或刷新前请下载。依赖库仍需联网加载。</p>
+<section><button id="start">开始</button><button id="stop">停止</button><p id="status" role="status">等待启动；需要 HTTPS 或 localhost</p>
+<div class="view"><video id="video" autoplay playsinline muted></video><canvas id="overlay" class="overlay"></canvas></div>
+<p id="stats">视频 —；检测 —；更新率 —</p><pre id="corners">未识别</pre></section>
+<section><h2>1. 标定图片采集</h2><a href="calibration_board.png" download>下载 A4 横向棋盘格</a>
+<p>9×6 个内角点，10×7 个方格；方格边长 20 mm。按实际大小 100% 打印，不适应页面，打印后用直尺确认并平贴硬板。内角点数量不是方格数量。</p>
+<p>采集至少 15–25 张清晰图片：近远、左右上下倾斜、中心及四角覆盖；完整显示棋盘。不要把相同姿态连拍当作覆盖。换镜头、变焦或画幅后需重新标定。</p>
+<button id="capture">拍照（原始帧）</button><button id="metadata">下载采集元数据</button><p id="count">已采集 0 张</p><div id="photos"></div></section>
+<section><h2>2. 导入标定与测距</h2><label>标定 JSON <input id="calibration" type="file" accept=".json,application/json"></label><p id="cal-status">没有有效标定，不输出米制距离</p>
+<label>ArUco 黑色正方形外框边长（mm，不含白边）<input id="size" type="number" value="50" min="10" max="2000"></label>
+<label>测量 ID（多个标记时手动选定）<select id="target"><option value="">请选择 ID</option></select></label>
+<pre id="pose" role="status">当前无有效测距</pre><p>距离为相机光学中心到标记中心的三维斜距 ‖t‖，不是 t 的 z 分量，不是脚下地面距离或楼层全局位置。未平滑；单平面可能存在双解，本页不能保证消除歧义，低像素误差也不保证物理准确。</p></section>
+<section><h2>3. 独立实验记录</h2><label>卷尺参考斜距（米）<input id="reference" type="number" step="0.01" min="0.01"></label><button id="record">记录一次测量</button><button id="export">导出记录 JSON</button><p id="record-status">0 次；每次请重新布置手机并手动记录，连续帧不是独立实验。</p></section>
+<script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/cv.js" onerror="document.getElementById('status').textContent='识别库加载失败'"></script>
+<script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/aruco.js" onerror="document.getElementById('status').textContent='识别库加载失败'"></script>
+<script src="lab-pose.js"></script><script src="lab.js"></script>
+<script async src="https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.10.0-release.1/dist/opencv.js" onload="if(window.cv &amp;&amp; typeof cv.then==='function')cv.then(m=>window.cv=m)" onerror="document.getElementById('cal-status').textContent='OpenCV.js 加载失败，无法测距；仍可采集'"></script></html>
+
