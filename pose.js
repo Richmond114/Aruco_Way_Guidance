@@ -46,7 +46,7 @@
     }
     const rms=Math.sqrt(error/4),tiltDeg=Math.acos(Math.min(1,Math.abs(normal[2])))*180/Math.PI;
     if(!Number.isFinite(rms)||rms>maxRmsPx||tiltDeg>maxTiltDeg) return null;
-    return {distanceM:norm(t),planeDistanceM:Math.abs(dot(t,normal)),tiltDeg,
+    return {method:'pose',distanceM:norm(t),planeDistanceM:Math.abs(dot(t,normal)),tiltDeg,
       axisPlaneDeg:90-tiltDeg,reprojectionPx:rms,translation:t};
   }
   if(typeof module!=='undefined'&&module.exports) module.exports={estimate};

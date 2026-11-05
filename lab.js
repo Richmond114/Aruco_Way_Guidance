@@ -10,14 +10,14 @@ let waitingText='等待测量';
 function renderPose(){
  const v=display.read(),s=v.summary;
  if(!v.raw)current=null;
- const text=s?`${v.historical?'上次测量，时间 '+s.windowEndTime+'\n':''}${s.representative.qualityMode}：${s.intervalMs?s.intervalMs/1000+' 秒汇总，中位距离':'实时原始距离'}约 ${s.distanceM.toFixed(2)} m\n窗口 ${s.sampleCount} 个有效样本；${s.windowStartTime} 至 ${s.windowEndTime}`:waitingText;
+ const text=s?`${v.historical?'上次测量，时间 '+s.windowEndTime+'\n':''}${s.representative.qualityMode}：大概距离约 ${s.distanceM.toFixed(2)} m（${s.intervalMs?s.intervalMs/1000+' 秒汇总，中位数':'实时原始值'}）\n窗口 ${s.sampleCount} 个有效样本；${s.windowStartTime} 至 ${s.windowEndTime}`:waitingText;
  if($('pose').textContent!==text)$('pose').textContent=text;
  const p=v.raw;
- $('raw-pose').textContent=p?`ID ${p.id}；原始斜距 ${p.distanceM.toFixed(4)} m\nt = [${p.tvec.map(x=>x.toFixed(4)).join(', ')}] m\n重投影 RMS ${p.rmsPx.toFixed(3)} px；标定 RMS ${cal.rmsPx.toFixed(3)} px\n时间 ${p.time}\n${p.ambiguity}；原始值未平滑`:'当前无有效原始测量';
+ $('raw-pose').textContent=p?`${p.method==='image-scale'?'图像尺度粗估；角度暂不可用':'位姿求解'}；ID ${p.id}；原始斜距 ${p.distanceM.toFixed(4)} m\nt = ${p.tvec?'['+p.tvec.map(x=>x.toFixed(4)).join(', ')+'] m':'未恢复平移'}\n重投影 RMS ${p.rmsPx==null?'不适用':p.rmsPx.toFixed(3)+' px'}；标定 RMS ${cal.rmsPx.toFixed(3)} px\n时间 ${p.time}\n${p.ambiguity}；原始值未平滑`:'当前无有效原始测量';
 }
 function invalid(s='等待测量',retain=false){current=null;tracker.reset();waitingText=retain?'等待测量':s;if(retain)display.fail();else display.reset();$('size-quality').textContent='像素尺寸：尚未检测目标';renderPose();}
 function pending(){current=null;waitingText='等待测量';display.fail();renderPose();}
-function displayRecord(){const s=display.read().summary;return s?{intervalMs:s.intervalMs,distanceM:s.distanceM,windowStartTime:s.windowStartTime,windowEndTime:s.windowEndTime,sampleCount:s.sampleCount,method:s.method,representativeTime:s.representativeTime}:null;}
+function displayRecord(){const s=display.read().summary;return s?{intervalMs:s.intervalMs,distanceM:s.distanceM,windowStartTime:s.windowStartTime,windowEndTime:s.windowEndTime,sampleCount:s.sampleCount,method:s.method,representativeTime:s.representativeTime,methodCounts:s.methodCounts}:null;}
 function download(blob,name){const u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),10000);}
 const json=(data,name)=>download(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),name);
 function stop(){session++;cancelAnimationFrame(raf);if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;video.srcObject=null;pen.clearRect(0,0,overlay.width,overlay.height);invalid();$('corners').textContent='未识别';$('stats').textContent='视频 —；检测 —；更新率 —';$('start').disabled=false;say('摄像头已释放');}
@@ -55,10 +55,19 @@ function scan(t){
  const sizeMm=Number($('size').value);
  // Configuration failures reset immediately; quality failures use temporal confirmation.
  if(!Number.isFinite(sizeMm)||sizeMm<10||sizeMm>2000)throw Error('码体边长需为 10–2000 mm');
- const contextKey=JSON.stringify([m.id,sizeMm,cal.id,cal.cameraMatrix,cal.distCoeffs,vw,vh,w,h,session,mode]);
+ const camera=stream?.getVideoTracks?.()?.[0]?.getSettings?.();
+ const contextKey=JSON.stringify([m.id,sizeMm,cal.id,cal.cameraMatrix,cal.distCoeffs,vw,vh,w,h,session,mode,camera?.deviceId,camera?.zoom]);
  if(display.context(contextKey))tracker.reset();
  let result;
- try{result=LabPose.solve(cv,corners,sizeMm,cal,{minEdgePx:mode.holdPx,maxRmsPx:mode.maxRmsPx});}catch(e){pending(tracker.step({edge,valid:false}).state);$('size-quality').textContent=sizeInfo+'；本帧原因：'+e.message;return;}
+ try{
+  try{result=LabPose.solve(cv,corners,sizeMm,cal,{minEdgePx:mode.holdPx,maxRmsPx:mode.maxRmsPx});}
+  catch(error){
+   if(mode!==LabPose.MODES.relaxed)throw error;
+   const K=cal.cameraMatrix,k={fx:K[0][0],fy:K[1][1],cx:K[0][2],cy:K[1][2]};
+   result=ScaleDistance.estimate(corners,sizeMm/1000,k,points=>ScaleDistance.normalizedCorners(cv,points,cal));
+   if(!result)throw error;
+  }
+ }catch(e){pending(tracker.step({edge,valid:false}).state);$('size-quality').textContent=sizeInfo;$('raw-pose').textContent='本帧未求解：'+e.message;return;}
  const quality=tracker.step({edge,valid:true});$('size-quality').textContent=sizeInfo;
  if(!quality.ready){pending(quality.state);return;}
  current={...result,id:m.id,sizeMm,calibrationId:cal.id,width:vw,height:vh,detectionWidth:w,detectionHeight:h,time:new Date().toISOString(),monotonic:performance.now(),sequence:++sequence,corners,minEdgeVideoPx:edge,qualityState:quality.state,qualityMode:mode.label,qualityThresholds:{...mode}};

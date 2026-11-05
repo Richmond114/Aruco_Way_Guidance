@@ -27,6 +27,7 @@ button:disabled {opacity:.55; cursor:default}
 input, textarea, select {font:inherit; background:#0d1422; color:#fff; border:1px solid #adc1e5; padding:10px; border-radius:8px; max-width:100%;}
 label {display:block; margin:12px 0; line-height:1.7}
 textarea {width:100%}
+pre {white-space:pre-wrap;overflow-wrap:anywhere}
 .panel {background:#1a2940; border:1px solid #324a6c; padding:20px; border-radius:18px; margin-top:16px;}
 .eyebrow {color:#a7c5eb; font-weight:650; font-size:14px}
 .place {font-size:28px; font-weight:750; margin:10px 0; min-height:36px;}
@@ -60,7 +61,7 @@ small {color:#a2b5d2; line-height:1.8; display:block; margin-top:20px}
  <label>测距模式
   <select id="normal-quality"><option value="relaxed" selected>超宽松粗估（默认）</option><option value="coarse">宽松测距</option><option value="strict">较严格测距</option></select>
  </label>
- <p class="note">默认超宽松粗估：成功求解即显示，最短边进入 4 px、保持 3 px；同时放宽角点形状和倾角限制。未输入内参时为视场角粗估。</p>
+ <p class="note">默认超宽松粗估：首次成功即显示，之后按所选间隔汇总，最短边进入 2 px、保持 1 px。位姿不稳时自动改用图像尺度估算距离，此时角度暂不可用。未输入内参时为视场角粗估。</p>
  <label>当前测试标记黑色本体边长（毫米，不含白边及裁剪框）
   <input id="marker-mm" type="number" min="10" max="2000" value="50" step="1">
  </label>
@@ -73,6 +74,7 @@ small {color:#a2b5d2; line-height:1.8; display:block; margin-top:20px}
    <textarea id="camera-intrinsics" rows="4" placeholder='{"width":1280,"height":720,"fx":1100,"fy":1100,"cx":640,"cy":360}'></textarea>
   </label>
  </details>
+ <p class="note">后台持续实时测量。短暂失败保持主数值，连续 800 ms 无结果才标为“上次测量”，连续 3 秒无结果才清空。汇总显示会延后反映移动。</p>
  <label>数值更新<select id="normal-interval"><option value="1000" selected>每 1 秒汇总（默认）</option><option value="2000">每 2 秒汇总</option><option value="0">实时原始值</option></select></label>
  <details><summary>实时原始测量详情</summary><pre id="normal-raw">等待测量</pre></details>
  <div id="pose-result" class="note">尚未测量；请先设置实际边长，再开始识别。</div>
@@ -95,6 +97,7 @@ small {color:#a2b5d2; line-height:1.8; display:block; margin-top:20px}
 <script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/cv.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/aruco.js"></script>
 <script src="pose.js"></script>
+<script src="scale-distance.js"></script>
 <script src="lab-pose.js"></script>
 <script src="measurement-display.js"></script>
 <script>
@@ -136,9 +139,8 @@ function poseText() {
   const p=s.representative;
   const label=s.intervalMs?`${s.intervalMs/1000} 秒汇总，中位距离`:'实时原始距离';
   const prefix=view.historical?`上次测量，时间 ${s.windowEndTime}。`:'';
-  return `${prefix}标记 ID ${p.id}，${p.mode}。${label}约 ${s.distanceM.toFixed(2)} 米。`+
-    `对应样本距标记平面约 ${p.planeDistanceM.toFixed(2)} 米。倾斜角约 ${Math.round(p.tiltDeg)} 度，`+
-    `光轴与标记平面夹角约 ${Math.round(p.axisPlaneDeg)} 度。`;
+  const angles=p.method==='image-scale'?'角度暂不可用。':`对应样本距标记平面约 ${p.planeDistanceM.toFixed(2)} 米。倾斜角约 ${Math.round(p.tiltDeg)} 度，光轴与标记平面夹角约 ${Math.round(p.axisPlaneDeg)} 度。`;
+  return `${prefix}标记 ID ${p.id}，${p.mode}。大概距离约 ${s.distanceM.toFixed(2)} 米（${label}）。时间 ${s.windowEndTime}。${angles}`;
 }
 function renderNormalPose(){
   const view=normalDisplay.read();
@@ -146,7 +148,7 @@ function renderNormalPose(){
   const text=view.summary?poseText():poseWaitingText;
   if($('pose-result').textContent!==text)$('pose-result').textContent=text;
   const p=view.raw;
-  $('normal-raw').textContent=p?`ID ${p.id}；原始斜距 ${p.distanceM.toFixed(4)} m；重投影 RMS ${p.reprojectionPx.toFixed(3)} px；时间 ${p.time}`:'当前无有效原始测量';
+  $('normal-raw').textContent=p?`${p.method==='image-scale'?'图像尺度粗估':'位姿求解'}；ID ${p.id}；原始斜距 ${p.distanceM.toFixed(4)} m；重投影 RMS ${p.reprojectionPx==null?'不适用':p.reprojectionPx.toFixed(3)+' px'}；时间 ${p.time}`:'当前无有效原始测量';
 }
 function updatePose(marker,w,h) {
   if(!window.MarkerPose || !normalTracker) {clearPose('姿态模块加载失败，请检查 pose.js 和 lab-pose.js');return;}
@@ -176,9 +178,12 @@ function updatePose(marker,w,h) {
     const rawCorners=LabPose.pointsToVideo(marker.corners,vw,vh,w,h);
     k={fx:k.fx*vw/w,fy:k.fy*vh/h,cx:k.cx*vw/w,cy:k.cy*vh/h};
     const edge=LabPose.minEdge(rawCorners);
-    const contextKey=JSON.stringify([marker.id,mm,k,normalQuality,session,vw,vh,w,h]);
+    const camera=stream?.getVideoTracks?.()?.[0]?.getSettings?.();
+    const contextKey=JSON.stringify([marker.id,mm,k,normalQuality,session,vw,vh,w,h,camera?.deviceId,camera?.zoom]);
     if(normalDisplay.context(contextKey))normalTracker.reset();
-    const pose=MarkerPose.estimate(rawCorners,mm/1000,k,{...normalQuality,minEdgePx:normalQuality.holdPx});
+    let pose=MarkerPose.estimate(rawCorners,mm/1000,k,{...normalQuality,minEdgePx:normalQuality.holdPx});
+    if(!pose && normalQuality===LabPose.MODES.relaxed && window.ScaleDistance)
+      pose=ScaleDistance.estimate(rawCorners,mm/1000,k);
     const quality=normalTracker.step({edge,valid:!!pose});
     if(!quality.ready) {
       latestPose=null;

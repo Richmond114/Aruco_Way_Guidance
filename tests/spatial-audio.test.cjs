@@ -45,6 +45,7 @@ function setup({audio=true,speech=true,resumeFails=false,camera}={}) {
   context.window=context;
   context.MeasurementDisplay=require('../measurement-display.js');
   context.MarkerPose=require('../pose.js');
+  context.ScaleDistance=require('../scale-distance.js');
   context.LabPose=require('../lab-pose.js');
   element('marker-mm').value='50';element('camera-fov').value='60';
   vm.createContext(context);vm.runInContext(script,context);
@@ -180,7 +181,7 @@ test('pose display uses the configured physical size and rejects stale or lost r
   assert.match(app.element('pose-result').textContent,/倾斜角约 0 度/);
   app.advance(1001);
   assert.match(app.run('poseText()'),/上次测量/);
-  app.advance(1000);assert.match(app.run('poseText()'),/没有有效距离/);
+  app.advance(2000);assert.match(app.run('poseText()'),/没有有效距离/);
   app.run('updatePose(null,480,360)');
   assert.equal(app.run('latestPose'),null);
 });
@@ -219,4 +220,29 @@ test('normal-page default relaxed mode displays a tiny solvable marker immediate
   assert.ok(app.run('latestPose.distanceM')>0);
   assert.match(app.element('pose-result').textContent,/超宽松粗估/);
   app.run('updatePose(null,480,360)');assert.equal(app.run('latestPose'),null);
+});
+test('normal summary voice labels historical readings and clears them after three seconds',()=>{
+ const app=setup();
+ app.run("latestPose={id:1,mode:'粗估',distanceM:1,planeDistanceM:.9,tiltDeg:20,axisPlaneDeg:70,reprojectionPx:.1,time:new Date().toISOString()};normalDisplay.push('test',latestPose);renderNormalPose()");
+ assert.match(app.run('poseText()'),/大概距离约 1.00/);
+ app.run("clearPose('等待测量',true)");
+ assert.equal(app.run('latestPose'),null);assert.doesNotMatch(app.element('pose-result').textContent,/上次测量，时间/);
+ app.advance(800);app.run('renderNormalPose()');assert.match(app.element('pose-result').textContent,/上次测量，时间/);
+ app.element('read-pose').click();assert.match(app.spoken.at(-1).text,/上次测量，时间/);
+ app.advance(2200);app.run('renderNormalPose()');assert.equal(app.element('pose-result').textContent,'等待测量');
+ app.element('normal-interval').value='0';app.element('normal-interval').change();
+ assert.equal(app.run('normalDisplay.read().summary'),null);
+});
+test('normal relaxed mode falls back to distance only, strict mode does not',()=>{
+ const app=setup();
+ app.run('MarkerPose={estimate:()=>null}');
+ const marker={id:1,corners:[{x:200,y:140},{x:280,y:140},{x:280,y:220},{x:200,y:220}]};
+ app.run(`updatePose(${JSON.stringify(marker)},480,360)`);
+ assert.equal(app.run('latestPose.method'),'image-scale');
+ assert.match(app.element('pose-result').textContent,/角度暂不可用/);
+ assert.doesNotMatch(app.element('pose-result').textContent,/0 度/);
+ app.element('read-pose').click();assert.match(app.spoken.at(-1).text,/角度暂不可用/);
+ app.element('normal-quality').value='strict';app.element('normal-quality').change();
+ for(let i=0;i<4;i++)app.run(`updatePose(${JSON.stringify(marker)},480,360)`);
+ assert.equal(app.run('latestPose'),null);
 });

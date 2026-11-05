@@ -13,7 +13,7 @@ function pointsToVideo(corners,vw,vh,dw,dh){return corners.map(p=>({x:p.x*vw/dw,
 function objectPoints(mm){const s=mm/2000;return [-s,s,0,s,s,0,s,-s,0,-s,-s,0];}
 function minEdge(corners){return Math.min(...corners.map((p,i)=>Math.hypot(p.x-corners[(i+1)%4].x,p.y-corners[(i+1)%4].y)));}
 // Only current valid observations can be recorded; this stabilizes status, not distance.
-const MODES={relaxed:{label:'超宽松粗估',enterPx:4,holdPx:3,maxRmsPx:12,confirmFrames:1,maxLengthSkew:.8,maxNonOrth:.95,maxTiltDeg:89.8},coarse:{label:'粗略测距',enterPx:8,holdPx:6,maxRmsPx:6},strict:{label:'较严格测距',enterPx:16,holdPx:12,maxRmsPx:3}};
+const MODES={relaxed:{label:'超宽松粗估',enterPx:2,holdPx:1,maxRmsPx:12,confirmFrames:1,maxLengthSkew:.8,maxNonOrth:.95,maxTiltDeg:89.8},coarse:{label:'粗略测距',enterPx:8,holdPx:6,maxRmsPx:6},strict:{label:'较严格测距',enterPx:16,holdPx:12,maxRmsPx:3}};
 function createTracker({enterPx=16,holdPx=12,confirmFrames=3}={}){
  let state='idle',good=0,bad=0,failure='';
  return {
@@ -60,7 +60,7 @@ function solve(cv,corners,mm,c,{minEdgePx=12,maxRmsPx=3}={}){
  corners.forEach((p,i)=>error+=(p.x-pp[2*i])**2+(p.y-pp[2*i+1])**2);
  const rms=Math.sqrt(error/4),distanceM=Math.hypot(...tr);
  if(!Number.isFinite(distanceM)||distanceM<=0||distanceM>100||!Number.isFinite(rms)||rms>maxRmsPx)throw Error(`结果异常或重投影误差超过 ${maxRmsPx} px`);
- return {distanceM,tvec:tr,rvec:rot,rmsPx:rms,solver:'IPPE_SQUARE',ambiguity:'单平面可能存在双解；本构建仅返回首选解，未消除歧义',smoothed:false};
+ return {distanceM,tvec:tr,rvec:rot,rmsPx:rms,method:'pose',solver:'IPPE_SQUARE',ambiguity:'单平面可能存在双解；本构建仅返回首选解，未消除歧义',smoothed:false};
  }finally{mats.forEach(m=>m.delete());}
 }
 const api={validate,pointsToVideo,objectPoints,solve,minEdge,createTracker,MODES};if(typeof module!=='undefined')module.exports=api;else root.LabPose=api;
