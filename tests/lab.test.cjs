@@ -5,7 +5,7 @@ test('calibration validation rejects missing fields and mismatched resolution',(
  assert.throws(()=>L.validate({},1280,720));assert.throws(()=>L.validate(calibration,640,360));assert.equal(L.validate(calibration,1280,720).id,'synthetic');
 });
 test('actual OpenCV.js: distorted synthetic corners, millimetres, order and resize',async()=>{
- const cv=require('../../.cache/opencv-lab.js'); await new Promise(resolve=>cv.then(()=>resolve()));
+ const cv=require('../vendor/opencv.js'); await new Promise(resolve=>cv.then(()=>resolve()));
  for(const mm of [30,80])for(const z of [.5,1,1.5,2,3]){
   const mats=[];const mat=(r,c,t,data)=>{const m=cv.matFromArray(r,c,t,data);mats.push(m);return m;};
   try{

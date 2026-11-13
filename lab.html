@@ -1,7 +1,7 @@
 <!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ArUco 测位实验</title>
-<style>body{font:17px system-ui;background:#0d1422;color:#f1f5ff;margin:auto;max-width:850px;padding:18px}a{color:#8ec5ff}section{background:#1a2940;padding:18px;margin:16px 0;border-radius:16px}button,input,select{font:inherit;padding:10px;margin:5px;max-width:95%}button{cursor:pointer}label{display:block}pre{white-space:pre-wrap;overflow-wrap:anywhere}.view{position:relative}video{width:100%;display:block}canvas.overlay{position:absolute;inset:0;width:100%;height:100%}img{max-width:160px}button:focus-visible,a:focus-visible{outline:3px solid #8ec5ff}</style>
+<style>body{font:17px system-ui;background:#0d1422;color:#f1f5ff;margin:auto;max-width:850px;padding:18px}a{color:#8ec5ff}section{background:#1a2940;padding:18px;margin:16px 0;border-radius:16px}button,input,select{font:inherit;padding:10px;margin:5px;max-width:95%}button{cursor:pointer}label{display:block}pre{white-space:pre-wrap;overflow-wrap:anywhere}.view{position:relative}video{width:100%;display:block}canvas.overlay{position:absolute;inset:0;width:100%;height:100%}img{max-width:160px}button:focus-visible,a:focus-visible{outline:3px solid #8ec5ff}</style><link rel="stylesheet" href="lab-theme.css">
 <a href="index.html">返回导览</a><h1>ArUco 测位实验</h1>
-<p>所有照片与记录仅保存在当前页面内存中，不自动上传。关闭或刷新前请下载。依赖库仍需联网加载。</p>
+<p>所有照片与记录仅保存在当前页面内存中，不自动上传。关闭或刷新前请下载。依赖库已保存本地，可离线加载。</p>
 <section><button id="start">开始</button><button id="stop">停止</button><p id="status" role="status">等待启动；需要 HTTPS 或 localhost</p>
 <div class="view"><video id="video" autoplay playsinline muted></video><canvas id="overlay" class="overlay"></canvas></div>
 <label>检测图像最大宽度（更高分辨率可能降低更新率）<select id="detect-width"><option value="640">640 px（省性能）</option><option value="960" selected>960 px</option><option value="1280">1280 px</option></select></label>
@@ -19,8 +19,8 @@
 <details><summary>检测质量详情</summary><p id="size-quality">像素尺寸：尚未检测目标</p></details>
 <pre id="pose" role="status">等待测量</pre><p>默认超宽松模式：进入 ≥2、保持 ≥1 原视频像素，成功求解即可参与汇总。位姿求解失败时尝试图像尺度粗估，角度暂不可用。短暂失败保持主数值，800 ms 后标记“上次测量”，连续 3 秒无结果才清空。仅有保留结果时不能新增实验记录。</p><p>粗略模式保留原 8/6 px 门槛和 6 px RMS 上限，较严格模式保留 16/12 px 和 3 px RMS。距离均为镜头到标记中心的三维斜距；尺度粗估没有恢复旋转或平移。原始值不做平滑，主距离可按窗口取中位数。</p></section>
 <section><h2>3. 独立实验记录</h2><label>卷尺参考斜距（米）<input id="reference" type="number" step="0.01" min="0.01"></label><button id="record">记录一次测量</button><button id="export">导出记录 JSON</button><p id="record-status">0 次；每次请重新布置手机并手动记录，连续帧不是独立实验。</p></section>
-<script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/cv.js" onerror="document.getElementById('status').textContent='识别库加载失败'"></script>
-<script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/aruco.js" onerror="document.getElementById('status').textContent='识别库加载失败'"></script>
+<script src="vendor/cv.js" onerror="document.getElementById('status').textContent='识别库加载失败'"></script>
+<script src="vendor/aruco.js" onerror="document.getElementById('status').textContent='识别库加载失败'"></script>
 <script src="lab-pose.js"></script><script src="scale-distance.js"></script><script src="measurement-display.js"></script><script src="lab.js"></script>
-<script async src="https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.10.0-release.1/dist/opencv.js" onload="if(window.cv &amp;&amp; typeof cv.then==='function')cv.then(m=>window.cv=m)" onerror="document.getElementById('cal-status').textContent='OpenCV.js 加载失败，无法测距；仍可采集'"></script></html>
+<script async src="vendor/opencv.js" onload="if(window.cv &amp;&amp; typeof cv.then==='function')cv.then(m=>window.cv=m)" onerror="document.getElementById('cal-status').textContent='OpenCV.js 加载失败，无法测距；仍可采集'"></script></html>
 

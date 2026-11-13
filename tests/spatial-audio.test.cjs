@@ -4,7 +4,7 @@ const fs=require('node:fs');
 const vm=require('node:vm');
 const path=require('node:path');
 const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
-const script=html.match(/<script>\s*([\s\S]*?)<\/script>/)[1];
+const script=fs.readFileSync(path.join(__dirname,'../core.js'),'utf8');
 
 function setup({audio=true,speech=true,resumeFails=false,camera}={}) {
   const spoken=[],sources=[],panners=[],timers=new Map(),elements=new Map();
@@ -56,105 +56,53 @@ function setup({audio=true,speech=true,resumeFails=false,camera}={}) {
 }
 async function flush(){for(let i=0;i<12;i++)await Promise.resolve();}
 
-test('right/left HRTF tone finishes before the corresponding Chinese instruction',async()=>{
-  const app=setup();
-  await app.run('prepareAudio(playback)');
-  for(const [id,x,phrase] of [[1,1,'请右转。'],[3,-1,'请左转。']]){
-    const count=app.spoken.length;
-    const pending=app.run(`promptLocation(LOCATIONS[${id}])`);
-    assert.equal(app.panners.at(-1).positionX.value,x);
-    assert.equal(app.panners.at(-1).panningModel,'HRTF');
-    assert.equal(app.sources.at(-1).buffer.length,28800);
-    assert.equal(app.spoken.length,count);
-    app.endTone();await pending;
-    assert.ok(app.spoken.at(-1).text.endsWith(phrase));
-  }
+test('P1–P5 map to IDs 0–4 and speak the requested route without spatial audio',async()=>{
+ const app=setup();
+ const expected=[/门槛.*门外走廊/,/门外走廊.*左转九十度/,/直行.*两到三米/,/电梯间门口.*右转/,/电梯前.*乘坐电梯/];
+ for(let id=0;id<5;id++){
+  await app.run(`promptLocation(LOCATIONS[${id}],true)`);
+  assert.match(app.spoken.at(-1).text,expected[id]);
+  assert.ok(app.run(`LOCATIONS[${id}].name`).startsWith(`P${id+1}`));
+ }
+ assert.equal(app.sources.length,0);assert.equal(app.panners.length,0);
 });
-
-test('locations without direction speak immediately without a directional tone',async()=>{
-  const app=setup();
-  await app.run('promptLocation(LOCATIONS[2])');
-  assert.equal(app.panners.length,0);
-  assert.equal(app.spoken[0].text,'您已到达一楼楼梯口，请注意台阶。');
+test('first decoded frame speaks immediately, continuous visibility never restarts it',async()=>{
+ const app=setup();await app.run('start()');app.spoken.length=0;
+ app.detect(1);app.run('scan(200)');assert.equal(app.spoken.length,1);
+ assert.match(app.spoken[0].text,/左转九十度/);
+ for(let i=1;i<220;i++){app.advance(180);app.run(`scan(${200+i*180})`);}
+ assert.equal(app.spoken.length,1);
+ app.detect(2);app.run('scan(40000)');assert.equal(app.spoken.length,2);
+ assert.match(app.spoken[1].text,/两到三米/);
+ assert.equal(app.sources.length,0);assert.equal(app.panners.length,0);
 });
-
-test('a newer marker cancels the old tone and prevents its delayed instruction',async()=>{
-  const app=setup();await app.run('prepareAudio(playback)');
-  const old=app.run('promptLocation(LOCATIONS[1])');
-  const oldSource=app.sources.at(-1);
-  const next=app.run('promptLocation(LOCATIONS[3])');
-  assert.equal(oldSource.stopped,true);
-  assert.equal(oldSource.disconnected,true);
-  app.endTone();await Promise.all([old,next]);
-  assert.deepEqual(app.spoken.map(s=>s.text),['您目前位于二楼主走廊。请左转。']);
+test('brief dropout is silent, two-second absence rearms same marker; unknown IDs are ignored',async()=>{
+ const app=setup();await app.run('start()');app.spoken.length=0;
+ app.detect(0);app.run('scan(200)');
+ app.detect(null);app.advance(500);app.run('scan(400)');
+ app.detect(0);app.run('scan(600)');assert.equal(app.spoken.length,1);
+ app.detect(null);app.advance(2000);app.run('scan(800)');
+ app.detect(0);app.run('scan(1000)');assert.equal(app.spoken.length,2);
+ app.detect(99);app.run('scan(1200)');assert.equal(app.spoken.length,2);
 });
-
-test('stop and pagehide cancel pending tones and speech continuations',async()=>{
-  const app=setup();await app.run('prepareAudio(playback)');
-  const pending=app.run('promptLocation(LOCATIONS[1])');
-  app.run('stop()');await pending;
-  assert.equal(app.spoken.length,0);
-  assert.equal(app.timers.size,0);
-  assert.equal(app.element('status').textContent,'识别已停止');
-  assert.match(script,/addEventListener\('pagehide',stop\)/);
+test('manual replay speaks complete route immediately and stop cancels speech',async()=>{
+ const app=setup();app.run('announce(3)');app.spoken.length=0;
+ app.element('repeat').click();assert.equal(app.spoken.length,1);
+ assert.match(app.spoken[0].text,/电梯间门口.*右转/);
+ app.run('stop()');assert.equal(app.element('status').textContent,'识别已停止');
+ assert.equal(app.sources.length,0);assert.equal(app.panners.length,0);
 });
-
-test('manual replay includes both the last direction and its full message',async()=>{
-  const app=setup();await app.run('prepareAudio(playback)');
-  app.run('announce(1)');app.endTone();await flush();
-  app.spoken.length=0;
-  app.element('repeat').click();await flush();
-  assert.equal(app.spoken.length,0);
-  app.endTone();await flush();
-  assert.equal(app.spoken[0].text,'您目前位于一楼电梯附近。请右转。');
+test('prototype speech works without Web Audio and spatial test buttons only speak',async()=>{
+ const app=setup({audio:false});await app.run('promptLocation(LOCATIONS[1],true)');
+ assert.match(app.spoken[0].text,/左转九十度/);
+ await app.run("testDirection('right')");assert.match(app.spoken.at(-1).text,/停用空间音频/);
+ assert.equal(app.sources.length,0);assert.equal(app.panners.length,0);
 });
-
-test('rapid audition clicks only speak the newest direction, without a camera',async()=>{
-  const app=setup();
-  const left=app.run("testDirection('left')");
-  const right=app.run("testDirection('right')");
-  await flush();app.endTone();await Promise.all([left,right]);
-  assert.equal(app.panners.length,1);
-  assert.equal(app.panners[0].positionX.value,1);
-  assert.deepEqual(app.spoken.map(s=>s.text),['右侧试听。请右转。']);
-});
-
-test('unsupported Web Audio and rejected resume retain spoken directions',async()=>{
-  for(const options of [{audio:false},{resumeFails:true}]){
-    const app=setup(options);
-    await app.run('promptLocation(LOCATIONS[1],true)');
-    assert.ok(app.spoken[0].text.endsWith('请右转。'));
-    assert.match(app.element('audio-status').textContent,/空间音频不可用/);
-  }
-});
-
-test('missing or failed speech keeps the visible instruction and directional sound',async()=>{
-  const app=setup({speech:false});await app.run('prepareAudio(playback)');
-  app.run('announce(3)');app.endTone();await flush();
-  assert.equal(app.panners.length,1);
-  assert.match(app.element('detail').textContent,/请左转/);
-  assert.match(app.element('audio-status').textContent,/不支持语音合成/);
-  const errorApp=setup();await errorApp.run('promptLocation(LOCATIONS[0])');
-  errorApp.spoken[0].onerror();
-  assert.match(errorApp.element('audio-status').textContent,/语音播放失败/);
-});
-
-test('an interrupted tone times out and falls back to speech',async()=>{
-  const app=setup();await app.run('prepareAudio(playback)');
-  const pending=app.run('promptLocation(LOCATIONS[1])');
-  [...app.timers.values()].find(t=>t.delay===1800).fn();await pending;
-  assert.match(app.element('audio-status').textContent,/播放中断/);
-  assert.ok(app.spoken[0].text.endsWith('请右转。'));
-});
-
-test('scanning requires two detections and preserves the 30-second throttle',async()=>{
-  const app=setup({audio:false});await app.run('start()');app.spoken.length=0;
-  app.detect(1);app.run('scan(200)');assert.equal(app.spoken.length,0);
-  app.run('scan(400)');await flush();assert.equal(app.spoken.length,1);
-  app.run('scan(600)');await flush();assert.equal(app.spoken.length,1);
-  app.advance(30001);app.run('scan(800)');await flush();assert.equal(app.spoken.length,2);
-  app.detect(90);app.run('scan(1000)');await flush();assert.equal(app.spoken.length,2);
-  app.run('stop()');assert.equal(app.stoppedTracks,1);
+test('speech failure keeps route text and does not require successful distance estimation',()=>{
+ const app=setup({speech:false});
+ app.run('announce(4)');assert.match(app.element('detail').textContent,/电梯前/);
+ assert.match(app.element('audio-status').textContent,/不支持语音合成/);
+ assert.equal(app.sources.length,0);
 });
 
 test('camera rejection leaves audition usable, and stop cancels pending camera startup',async()=>{
@@ -163,7 +111,7 @@ test('camera rejection leaves audition usable, and stop cancels pending camera s
   assert.match(denied.element('status').textContent,/启动失败/);
   assert.equal(denied.element('start').disabled,false);
   const audition=denied.run("testDirection('right')");await flush();denied.endTone();await audition;
-  assert.ok(denied.spoken.at(-1).text.endsWith('请右转。'));
+  assert.match(denied.spoken.at(-1).text,/停用空间音频/);
   let acquire,stops=0;
   const app=setup({camera:()=>new Promise(resolve=>{acquire=resolve;})});
   const pending=app.run('start()');app.run('stop()');

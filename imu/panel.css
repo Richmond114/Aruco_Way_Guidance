@@ -1,0 +1,24 @@
+.imu-panel .card{background:white;border:1px solid #ddd8c5;border-radius:12px;padding:12px;margin:12px 0;min-width:0}
+.imu-panel h2{margin:8px 0;font-size:22px}
+.imu-panel h3{font-size:17px}
+.imu-panel .connection-top,.imu-panel .title-row{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px}
+.imu-panel .buttons{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
+.imu-panel button{background:var(--blue);color:white;border-radius:10px;padding:12px;min-height:48px;font-size:16px}
+.imu-panel .badge{display:inline-block;border-radius:6px;background:#eef1ff;color:#2049df;padding:6px 8px}
+.imu-panel .badge.connected{background:#e4f5e8;color:#175c2a}
+.imu-panel .badge.error{background:#fff0e9;color:#922e11}
+.imu-panel .notice{padding:12px;border-radius:10px;background:#fff0d2;color:#684b12;overflow-wrap:anywhere;font-size:15px;line-height:1.7}
+.imu-panel .hint,.imu-panel .footnote,.imu-panel .caption{font-size:14px;line-height:1.7;color:#52617b}
+.imu-panel .hint{position:static;inset:auto;display:block;text-align:left;padding:0}
+.imu-panel .metrics .card{display:grid;gap:6px}
+.imu-panel strong{font-size:20px;font-variant-numeric:tabular-nums}
+.imu-panel .values{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:14px}
+.imu-panel .values.four{grid-template-columns:repeat(2,minmax(0,1fr))}
+.imu-panel .values>div{display:grid;gap:6px;background:#f4f6ff;border-radius:8px;padding:8px 4px;min-width:0}
+.imu-panel .value-label{font-size:14px;color:#52617b}
+.imu-panel .value-number{font-family:Consolas,monospace;font-size:17px;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.imu-panel .stale .value-number{color:#777}
+.imu-panel .unit-toggle{font-size:14px;margin:0}
+.imu-panel .unit-toggle select{width:auto;padding:8px;margin:0;min-height:44px}
+.imu-panel #imu-logs{max-height:220px;overflow:auto;padding-left:22px;font-size:14px;line-height:1.7}
+.imu-panel pre{overflow-wrap:anywhere;word-break:break-all}

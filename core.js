@@ -1,0 +1,316 @@
+
+'use strict';
+// 与 Python 脚本使用的 DICT_ARUCO_ORIGINAL 对应。
+const LOCATIONS = {
+  0: {name: 'P1 · 门内门槛', message: '您现在位于门内，接近门槛。请迈过门槛，进入门外走廊。'},
+  1: {name: 'P2 · 门外走廊', message: '您已来到门外走廊，请立即向左转九十度。', direction: 'left'},
+  2: {name: 'P3 · 走廊直行', message: '请继续直行大约两到三米。'},
+  3: {name: 'P4 · 电梯间门口', message: '您已到达电梯间门口，请向右转，进入电梯间乘坐电梯。', direction: 'right'},
+  4: {name: 'P5 · 电梯前', message: '您已站在电梯前，可以乘坐电梯了。'}
+};
+const $ = id => document.getElementById(id);
+const video = $('video'), overlay = $('overlay');
+const ctx = overlay.getContext('2d', {willReadFrequently: true});
+const frame = document.createElement('canvas');
+const frameCtx = frame.getContext('2d', {willReadFrequently: true});
+let stream = null, detector = null, raf = null;
+let lastScan = 0, currentId = null, candidateId = null, candidateCount = 0;
+let announcedAt = 0;
+let lastMarkerSeenAt = -Infinity;
+let session = 0, starting = false;
+let audioContext = null, toneBuffer = null, activeTone = null, playback = 0;
+let spatialStatus = '路线原型测试：普通语音播报，空间音频已停用', speechStatus = '';
+const DIRECTIONS = {left: '请左转。', right: '请右转。'};
+let latestPose=null;
+let normalQuality=window.LabPose?.MODES.relaxed,normalTracker=window.LabPose?.createTracker(normalQuality);
+const normalDisplay=MeasurementDisplay.create({freshMs:1000,now:()=>performance.now()});
+let poseWaitingText='等待测量';
+function clearPose(message='等待测量',retain=false) {
+  normalTracker?.reset();latestPose=null;
+  poseWaitingText=retain?'等待测量':message;
+  if(retain)normalDisplay.fail();else normalDisplay.reset();
+  renderNormalPose();
+}
+function poseText() {
+  const view=normalDisplay.read(),s=view.summary;
+  if(!s)return '当前没有有效距离和角度，请对准标记重新测量。';
+  const p=s.representative;
+  const label=s.intervalMs?`${s.intervalMs/1000} 秒汇总，中位距离`:'实时原始距离';
+  const prefix=view.historical?`上次测量，时间 ${s.windowEndTime}。`:'';
+  const angles=p.method==='image-scale'?'角度暂不可用。':`对应样本距标记平面约 ${p.planeDistanceM.toFixed(2)} 米。倾斜角约 ${Math.round(p.tiltDeg)} 度，光轴与标记平面夹角约 ${Math.round(p.axisPlaneDeg)} 度。`;
+  return `${prefix}标记 ID ${p.id}，${p.mode}。大概距离约 ${s.distanceM.toFixed(2)} 米（${label}）。时间 ${s.windowEndTime}。${angles}`;
+}
+function renderNormalPose(){
+  const view=normalDisplay.read();
+  if(!view.raw)latestPose=null;
+  const text=view.summary?poseText():poseWaitingText;
+  if($('pose-result').textContent!==text)$('pose-result').textContent=text;
+  const p=view.raw;
+  $('normal-raw').textContent=p?`${p.method==='image-scale'?'图像尺度粗估':'位姿求解'}；ID ${p.id}；原始斜距 ${p.distanceM.toFixed(4)} m；重投影 RMS ${p.reprojectionPx==null?'不适用':p.reprojectionPx.toFixed(3)+' px'}；时间 ${p.time}`:'当前无有效原始测量';
+}
+function updatePose(marker,w,h) {
+  if(!window.MarkerPose || !normalTracker) {clearPose('姿态模块加载失败，请检查 pose.js 和 lab-pose.js');return;}
+  if(!marker) {clearPose('等待测量',true);return;}
+  try {
+    // 可在 LOCATIONS 中为不同安装标记设置 sizeMm，否则使用页面的测试尺寸。
+    const mm=LOCATIONS[marker.id].sizeMm ?? Number($('marker-mm').value);
+    if(!Number.isFinite(mm)||mm<10||mm>2000) throw Error('请填写 10–2000 mm 的实际边长');
+    let k,mode;
+    const raw=$('camera-intrinsics').value.trim();
+    if(raw) {
+      const c=JSON.parse(raw);
+      if(!['width','height','fx','fy','cx','cy'].every(key=>Number.isFinite(c[key])) ||
+         c.width<=0||c.height<=0||c.fx<=0||c.fy<=0||c.cx<0||c.cx>c.width||c.cy<0||c.cy>c.height)
+        throw Error('内参需包含有效 width、height、fx、fy、cx、cy');
+      if(Math.abs((c.width/c.height)/(w/h)-1)>.02) throw Error('内参画幅与当前视频不同，请重新标定');
+      k={fx:c.fx*w/c.width,fy:c.fy*h/c.height,cx:c.cx*w/c.width,cy:c.cy*h/c.height};
+      mode='已输入内参的估计（未校正畸变）';
+    } else {
+      const fov=Number($('camera-fov').value);
+      if(!Number.isFinite(fov)||fov<20||fov>120) throw Error('视场角需为 20–120 度');
+      const f=w/(2*Math.tan(fov*Math.PI/360));
+      k={fx:f,fy:f,cx:w/2,cy:h/2};mode='未标定粗估';
+    }
+    // Restore corners and intrinsics to actual video pixels before applying thresholds.
+    const vw=video.videoWidth||w,vh=video.videoHeight||h;
+    const rawCorners=LabPose.pointsToVideo(marker.corners,vw,vh,w,h);
+    k={fx:k.fx*vw/w,fy:k.fy*vh/h,cx:k.cx*vw/w,cy:k.cy*vh/h};
+    const edge=LabPose.minEdge(rawCorners);
+    const camera=stream?.getVideoTracks?.()?.[0]?.getSettings?.();
+    const contextKey=JSON.stringify([marker.id,mm,k,normalQuality,session,vw,vh,w,h,camera?.deviceId,camera?.zoom]);
+    if(normalDisplay.context(contextKey))normalTracker.reset();
+    let pose=MarkerPose.estimate(rawCorners,mm/1000,k,{...normalQuality,minEdgePx:normalQuality.holdPx});
+    if(!pose && normalQuality===LabPose.MODES.relaxed && window.ScaleDistance)
+      pose=ScaleDistance.estimate(rawCorners,mm/1000,k);
+    const quality=normalTracker.step({edge,valid:!!pose});
+    if(!quality.ready) {
+      latestPose=null;
+      poseWaitingText='等待测量';normalDisplay.fail();renderNormalPose();
+      return;
+    }
+    latestPose={...pose,id:marker.id,mode:normalQuality.label+'，'+mode,time:new Date().toISOString()};
+    normalDisplay.push(contextKey,latestPose);poseWaitingText='等待测量';renderNormalPose();
+  } catch(e) {clearPose('测量设置无效：'+e.message);}
+}
+function status(s) { $('status').textContent=s; }
+function audioStatus(spatial, speech = speechStatus) {
+  spatialStatus=spatial; speechStatus=speech;
+  $('audio-status').textContent=[spatialStatus,speechStatus].filter(Boolean).join('；');
+}
+function cancelPrompt() {
+  playback++;
+  if (activeTone) activeTone.cancel();
+  window.speechSynthesis?.cancel();
+}
+function within(promise, milliseconds) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {timer=setTimeout(()=>reject(new Error('音频启动超时')),milliseconds);})
+  ]).finally(()=>clearTimeout(timer));
+}
+// 必须在点击事件中调用，以便移动端允许音频播放。失败不阻断摄像头。
+async function prepareAudio(token) {
+  try {
+    const AudioContextClass=window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) throw new Error('不支持 Web Audio');
+    if (!audioContext || audioContext.state==='closed') {
+      audioContext=new AudioContextClass();
+      toneBuffer=null;
+    }
+    // 在用户手势期间同时恢复上下文并播放一个静音样本。
+    const resumed=audioContext.state==='running' ? Promise.resolve() : audioContext.resume();
+    const unlock=audioContext.createBufferSource();
+    unlock.buffer=audioContext.createBuffer(1,1,audioContext.sampleRate);
+    unlock.connect(audioContext.destination);
+    unlock.onended=()=>unlock.disconnect();
+    unlock.start();
+    await within(resumed,1500);
+    if (audioContext.state!=='running') throw new Error('播放受限');
+    if (token===playback) audioStatus('空间音频已就绪，请使用双声道耳机');
+    return true;
+  } catch(e) {
+    if (token===playback) audioStatus('空间音频不可用，将使用语音和文字提示');
+    return false;
+  }
+}
+function makeToneBuffer() {
+  const rate=audioContext.sampleRate;
+  const buffer=audioContext.createBuffer(1,Math.ceil(rate*0.6),rate);
+  const samples=buffer.getChannelData(0);
+  for (let i=0;i<samples.length;i++) {
+    const t=i/rate;
+    const pulse=t<0.24 ? t : t-0.34;
+    if (pulse>=0 && pulse<0.24) {
+      const envelope=Math.min(pulse/0.02,1,(0.24-pulse)/0.04);
+      samples[i]=Math.sin(2*Math.PI*660*pulse)*envelope*0.22;
+    }
+  }
+  return buffer;
+}
+// 独立的方向播放接口；未来可由 IMU/路线判断层提供 direction。
+function playDirection(direction, token) {
+  if (direction!=='left' && direction!=='right') return Promise.resolve(false);
+  if (token!==playback) return Promise.resolve(false);
+  return new Promise(resolve => {
+    let source, panner, watchdog, finished=false;
+    const finish=(completed) => {
+      if (finished) return;
+      finished=true; clearTimeout(watchdog);
+      if (source) {
+        source.onended=null;
+        try {source.stop();} catch(e) { /* 已停止 */ }
+        source.disconnect();
+      }
+      panner?.disconnect();
+      if (activeTone?.cancel===cancel) activeTone=null;
+      resolve(completed);
+    };
+    const cancel=()=>finish(false);
+    try {
+      if (!audioContext || audioContext.state!=='running') throw new Error('音频未就绪');
+      panner=audioContext.createPanner();
+      panner.panningModel='HRTF';
+      panner.distanceModel='inverse';
+      // 默认听者位于原点、面向 -Z；X 正方向为听者右侧。
+      const x=direction==='right' ? 1 : -1;
+      if (panner.positionX) {
+        panner.positionX.value=x; panner.positionY.value=0; panner.positionZ.value=0;
+      } else {panner.setPosition(x,0,0);}
+      source=audioContext.createBufferSource();
+      source.buffer=toneBuffer || (toneBuffer=makeToneBuffer());
+      source.connect(panner); panner.connect(audioContext.destination);
+      activeTone={cancel};
+      source.onended=()=>finish(true);
+      // 系统中断或挂起时也应释放提示并恢复语音降级。
+      watchdog=setTimeout(()=>{
+        if (token===playback) audioStatus('方向音播放中断，将使用语音和文字提示');
+        finish(false);
+      },1800);
+      source.start();
+    } catch(e) {
+      if (token===playback) audioStatus('空间音频不可用，将使用语音和文字提示');
+      finish(false);
+    }
+  });
+}
+function speak(message, token) {
+  if (token!==playback) return;
+  if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) {
+    audioStatus(spatialStatus,'浏览器不支持语音合成，请查看文字提示'); return;
+  }
+  try {
+    const utterance=new SpeechSynthesisUtterance(message);
+    utterance.lang='zh-CN'; utterance.rate=0.92;
+    utterance.onerror=()=>{
+      if (token===playback) audioStatus(spatialStatus,'语音播放失败，请查看文字提示');
+    };
+    audioStatus(spatialStatus,'');
+    window.speechSynthesis.speak(utterance);
+  } catch(e) {audioStatus(spatialStatus,'语音播放失败，请查看文字提示');}
+}
+function locationMessage(item) {
+  return item.message;
+}
+async function promptLocation(item, unlock=false) {
+  cancelPrompt();
+  const token=playback;
+  // 此轮原型只使用系统语音，不初始化 Web Audio，也不等待方向提示音。
+  speak(locationMessage(item),token);
+}
+async function testDirection(direction) {
+  cancelPrompt();
+  const token=playback;
+  speak('本次路线测试已停用空间音频，使用普通语音播报。',token);
+}
+function announce(id) {
+  const item=LOCATIONS[id];
+  currentId=id; announcedAt=Date.now();
+  $('place').textContent=item.name;
+  $('detail').textContent=locationMessage(item);
+  status(`已识别标记 ID ${id}`);
+  void promptLocation(item);
+  if(typeof CustomEvent!=='undefined') window.dispatchEvent(new CustomEvent('guide-recognized',{detail:{id,item}}));
+}
+function scan(t) {
+  if (!stream) return;
+  raf=requestAnimationFrame(scan);
+  if (video.readyState < 2) {clearPose('等待摄像头画面',true);return;}
+  if (t-lastScan < 180) return;
+  lastScan=t;
+  const w=480, h=Math.max(1,Math.round(w*(video.videoHeight/video.videoWidth)));
+  if (frame.width!==w || frame.height!==h) {frame.width=overlay.width=w; frame.height=overlay.height=h;}
+  frameCtx.drawImage(video,0,0,w,h);
+  let markers=[];
+  try { markers=detector.detect(frameCtx.getImageData(0,0,w,h)); }
+  catch(e) {clearPose('等待测量',true);status('识别出现错误：'+e.message); return;}
+  ctx.clearRect(0,0,w,h);
+  markers.forEach(m => {
+    ctx.beginPath(); m.corners.forEach((c,i)=>i?ctx.lineTo(c.x,c.y):ctx.moveTo(c.x,c.y));ctx.closePath();
+    ctx.lineWidth=3;ctx.strokeStyle='#8afbc2';ctx.stroke();
+    ctx.font='bold 22px sans-serif';ctx.fillStyle='#fff';
+    ctx.fillText('ID '+m.id,m.corners[0].x,m.corners[0].y-8);
+  });
+  // 首次解码即播报；持续可见时不重播，离开画面满 2 秒后再次出现可重播。
+  const match=markers.find(m=>Object.prototype.hasOwnProperty.call(LOCATIONS,m.id));
+  if (!match) {clearPose('等待测量',true);candidateId=null;candidateCount=0;return;}
+  if (candidateId===match.id) candidateCount++;else {candidateId=match.id;candidateCount=1;}
+  const seenAt=performance.now(),reentered=seenAt-lastMarkerSeenAt>=2000;
+  lastMarkerSeenAt=seenAt;
+  if(currentId!==match.id || reentered) announce(match.id);
+  if(candidateCount>=2 || normalQuality?.confirmFrames===1) updatePose(match,w,h); else clearPose('正在确认标记');
+}
+async function start() {
+  if(stream || starting) return;
+  if(typeof AR==='undefined' || typeof CV==='undefined') {status('识别库加载失败，请检查网络连接');return;}
+  if (!navigator.mediaDevices?.getUserMedia) {status('需要 HTTPS 或 localhost 才能启用摄像头');return;}
+  starting=true;
+  const ticket=++session;
+  $('start').disabled=true; $('stop').disabled=false;
+  cancelPrompt();
+  try {
+    detector=new AR.Detector({dictionaryName:'ARUCO'});
+    const acquired=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}}});
+    if (ticket!==session) {acquired.getTracks().forEach(t=>t.stop());return;}
+    stream=acquired;
+    video.srcObject=stream;await video.play();
+    if (ticket!==session) return;
+    $('view').classList.add('active');$('start').disabled=true;$('stop').disabled=false;
+    currentId=null;candidateId=null;candidateCount=0;lastScan=0;lastMarkerSeenAt=-Infinity;status('摄像头已启动，正在寻找标记…');
+    void promptLocation({message:'位置识别已开启，请缓慢移动手机，对准附近的标记。'});
+    raf=requestAnimationFrame(scan);
+  } catch(e) {
+    if (ticket!==session) return;
+    stop(); status('启动失败：'+e.message);
+  } finally {if (ticket===session) starting=false;}
+}
+function stop() {
+  clearPose('识别已停止，测量已清除');
+  session++; starting=false;
+  cancelPrompt();
+  if(raf!==null)cancelAnimationFrame(raf); raf=null;
+  if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;
+  video.srcObject=null;ctx.clearRect(0,0,overlay.width,overlay.height);
+  $('view').classList.remove('active');$('start').disabled=false;$('stop').disabled=true;
+  status('识别已停止');
+}
+$('start').addEventListener('click',start);
+$('stop').addEventListener('click',stop);
+$('normal-interval').addEventListener('change',()=>{normalDisplay.setInterval(Number($('normal-interval').value));clearPose('更新间隔已切换，等待测量');});
+setInterval(renderNormalPose,100);
+$('read-pose').addEventListener('click',()=>void promptLocation({message:poseText()}));
+['marker-mm','camera-fov','camera-intrinsics'].forEach(id=>$(id).addEventListener('input',()=>clearPose('设置已更新，等待重新测量')));
+$('normal-quality').addEventListener('change',()=>{
+  if(!window.LabPose)return;
+  normalQuality=LabPose.MODES[$('normal-quality').value]||LabPose.MODES.relaxed;
+  normalTracker=LabPose.createTracker(normalQuality);clearPose('模式已切换，正在测距');
+});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)stop();});
+$('repeat').addEventListener('click',()=>void promptLocation(
+  currentId===null ? {message:'尚未识别到位置。'} : LOCATIONS[currentId],true));
+$('test-left').addEventListener('click',()=>void testDirection('left'));
+$('test-right').addEventListener('click',()=>void testDirection('right'));
+$('cancel-audio').addEventListener('click',()=>{
+  cancelPrompt(); audioStatus('提示已停止；识别期间遇到新标记仍会播放提示','');
+});
+window.addEventListener('pagehide',stop);

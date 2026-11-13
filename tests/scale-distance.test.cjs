@@ -25,7 +25,7 @@ test('unusable corners, invalid intrinsics, and excessive distance do not produc
  assert.equal(S.estimate(corners(.05,200),.05,k),null);
 });
 test('actual OpenCV inverse projection corrects all supported coefficient lengths',async()=>{
- const cv=require('../../.cache/opencv-lab.js');await new Promise(resolve=>cv.then(()=>resolve()));
+ const cv=require('../vendor/opencv.js');await new Promise(resolve=>cv.then(()=>resolve()));
  for(const n of [4,5,8,12,14]){
   const dist=[.14,-.04,.003,-.002,.01,.002,-.001,.001,.0001,-.0001,.0001,-.0001,.02,-.01].slice(0,n);
   const c={cameraMatrix:[[900,0,640],[0,910,360],[0,0,1]],distCoeffs:dist};
