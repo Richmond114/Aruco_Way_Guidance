@@ -1,12 +1,13 @@
 
 'use strict';
 // 与 Python 脚本使用的 DICT_ARUCO_ORIGINAL 对应。
-const LOCATIONS = {
-  0: {name: 'P1 · 门内门槛', message: '您现在位于门内，接近门槛。请迈过门槛，进入门外走廊。'},
-  1: {name: 'P2 · 门外走廊', message: '您已来到门外走廊，请立即向左转九十度。', direction: 'left'},
-  2: {name: 'P3 · 走廊直行', message: '请继续直行大约两到三米。'},
-  3: {name: 'P4 · 电梯间门口', message: '您已到达电梯间门口，请向右转，进入电梯间乘坐电梯。', direction: 'right'},
-  4: {name: 'P5 · 电梯前', message: '您已站在电梯前，可以乘坐电梯了。'}
+const LOCATIONS = window.GUIDE_LOCATIONS || {
+  0: {name: '一楼入口', message: '您已到达教学楼一楼入口。'},
+  // 演示方向，实际使用前必须按现场路线配置；不代表摄像头测得的朝向。
+  1: {name: '一楼电梯', message: '您目前位于一楼电梯附近。', direction: 'right'},
+  2: {name: '一楼楼梯口', message: '您已到达一楼楼梯口，请注意台阶。'},
+  3: {name: '二楼主走廊', message: '您目前位于二楼主走廊。', direction: 'left'},
+  4: {name: '二楼教室', message: '您已到达二楼教室门口。'}
 };
 const $ = id => document.getElementById(id);
 const video = $('video'), overlay = $('overlay');
@@ -16,10 +17,14 @@ const frameCtx = frame.getContext('2d', {willReadFrequently: true});
 let stream = null, detector = null, raf = null;
 let lastScan = 0, currentId = null, candidateId = null, candidateCount = 0;
 let announcedAt = 0;
-let lastMarkerSeenAt = -Infinity;
+let announcedItem = null;
+let unknownCandidateId = null, unknownCandidateCount = 0;
+const unknownAnnouncedAt = new Map();
 let session = 0, starting = false;
 let audioContext = null, toneBuffer = null, activeTone = null, playback = 0;
-let spatialStatus = '路线原型测试：普通语音播报，空间音频已停用', speechStatus = '';
+let spatialStatus = '空间音频尚未启用', speechStatus = '';
+// 保留正在播放的 utterance，直到结束；避免移动浏览器提前回收对象。
+let activeSpeech = null;
 const DIRECTIONS = {left: '请左转。', right: '请右转。'};
 let latestPose=null;
 let normalQuality=window.LabPose?.MODES.relaxed,normalTracker=window.LabPose?.createTracker(normalQuality);
@@ -96,11 +101,20 @@ function status(s) { $('status').textContent=s; }
 function audioStatus(spatial, speech = speechStatus) {
   spatialStatus=spatial; speechStatus=speech;
   $('audio-status').textContent=[spatialStatus,speechStatus].filter(Boolean).join('；');
+  const routeStatus=$('route-speech-status');
+  if(routeStatus)routeStatus.textContent=speechStatus||'点击“重听路线提示”可再次播放中文。';
 }
 function cancelPrompt() {
   playback++;
   if (activeTone) activeTone.cancel();
-  window.speechSynthesis?.cancel();
+  const synth=window.speechSynthesis,job=activeSpeech;
+  activeSpeech=null;
+  if(job){clearTimeout(job.watchdog);clearTimeout(job.retry);}
+  // 不对空队列反复 cancel；部分手机的原生 TTS 会把紧接着的新播报也取消。
+  if(job||synth?.speaking||synth?.pending){
+    try{synth?.cancel();}catch(e){/* 保留文字提示 */}
+    audioStatus(spatialStatus,'播报已停止');
+  }
 }
 function within(promise, milliseconds) {
   let timer;
@@ -199,38 +213,104 @@ function speak(message, token) {
   if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) {
     audioStatus(spatialStatus,'浏览器不支持语音合成，请查看文字提示'); return;
   }
-  try {
-    const utterance=new SpeechSynthesisUtterance(message);
-    utterance.lang='zh-CN'; utterance.rate=0.92;
-    utterance.onerror=()=>{
-      if (token===playback) audioStatus(spatialStatus,'语音播放失败，请查看文字提示');
+  const synth=window.speechSynthesis;
+  const job={utterance:null,watchdog:null,retry:null,attempt:0};
+  activeSpeech=job;
+  const current=()=>token===playback&&activeSpeech===job;
+  const release=()=>{clearTimeout(job.watchdog);clearTimeout(job.retry);if(activeSpeech===job)activeSpeech=null;};
+  const failure=code=>{
+    const reasons={
+      'not-allowed':'浏览器阻止了语音，请点击“重听路线提示”',
+      'language-unavailable':'手机没有可用的中文语音，请检查系统文字转语音设置',
+      'voice-unavailable':'所选中文语音不可用，请检查系统文字转语音设置',
+      'synthesis-unavailable':'系统语音引擎不可用',
+      'audio-busy':'音频正在被其他应用占用',
+      'network':'语音服务网络连接失败'
     };
-    audioStatus(spatialStatus,'');
-    window.speechSynthesis.speak(utterance);
-  } catch(e) {audioStatus(spatialStatus,'语音播放失败，请查看文字提示');}
+    audioStatus(spatialStatus,(reasons[code]||'语音播放失败，请点击“重听路线提示”')+(code?'（'+code+'）':''));
+  };
+  const attempt=()=>{
+    if(!current())return;
+    let started=false;
+    try {
+      const utterance=new SpeechSynthesisUtterance(message);
+      job.utterance=utterance;
+      utterance.lang='zh-CN';utterance.rate=0.92;utterance.volume=1;
+      const voices=synth.getVoices?.()||[];
+      const voice=voices.find(v=>/^zh[-_]CN$/i.test(v.lang))||voices.find(v=>/^zh\b/i.test(v.lang));
+      if(voice){utterance.voice=voice;utterance.lang=voice.lang;}
+      const valid=()=>current()&&job.utterance===utterance;
+      utterance.onstart=()=>{if(valid()){started=true;clearTimeout(job.watchdog);audioStatus(spatialStatus,'正在播报中文');}};
+      utterance.onend=()=>{if(valid()){release();audioStatus(spatialStatus,'本次语音播放结束');}};
+      utterance.onerror=event=>{
+        if(!valid())return;
+        clearTimeout(job.watchdog);
+        const code=event?.error||'';
+        // 仅对尚未开始的原生引擎取消/失败重试一次；停止和新站会使旧 token 失效。
+        if(!started&&job.attempt===0&&['canceled','interrupted','synthesis-failed'].includes(code)){
+          job.attempt++;job.utterance=null;
+          audioStatus(spatialStatus,'正在重新启动语音');
+          job.retry=setTimeout(attempt,200);return;
+        }
+        release();failure(code);
+      };
+      audioStatus(spatialStatus,'正在请求中文语音');
+      job.watchdog=setTimeout(()=>{
+        if(!valid()||started)return;
+        release();try{synth.cancel();}catch(e){}
+        audioStatus(spatialStatus,'未收到语音启动确认，请点击“重听路线提示”；仍无声时请尝试 Chrome');
+      },6000);
+      if(synth.paused)synth.resume?.();
+      synth.speak(utterance);
+    } catch(e) {if(current()){release();failure('');}}
+  };
+  attempt();
 }
 function locationMessage(item) {
-  return item.message;
+  return item.message+(item.directionInMessage ? '' : (DIRECTIONS[item.direction] || ''));
 }
 async function promptLocation(item, unlock=false) {
   cancelPrompt();
   const token=playback;
-  // 此轮原型只使用系统语音，不初始化 Web Audio，也不等待方向提示音。
+  // 自动识别不重试解锁；重播按钮允许通过用户手势恢复音频。
+  // 无方向音时，在点击回调中直接启动语音，不等待 Web Audio 的异步恢复。
+  if (unlock&&!DIRECTIONS[item.direction]){speak(locationMessage(item),token);return;}
+  if (unlock) await prepareAudio(token);
+  if (token!==playback) return;
+  if (DIRECTIONS[item.direction]) await playDirection(item.direction,token);
   speak(locationMessage(item),token);
+}
+function replayLocationSpeech(item) {
+  cancelPrompt();
+  // 手动恢复优先保证中文播报，跳过方向音及其异步等待。
+  speak(locationMessage(item),playback);
 }
 async function testDirection(direction) {
   cancelPrompt();
   const token=playback;
-  speak('本次路线测试已停用空间音频，使用普通语音播报。',token);
+  const ready=await prepareAudio(token);
+  if (token!==playback) return;
+  if (ready) await playDirection(direction,token);
+  speak((direction==='left' ? '左侧试听。' : '右侧试听。')+DIRECTIONS[direction],token);
 }
 function announce(id) {
-  const item=LOCATIONS[id];
-  currentId=id; announcedAt=Date.now();
+  // 路线层先解析当前节点，避免旧地点语音先于路线提示播放。
+  // 返回 null 可暂缓确认；此时不更新节流时间，待路线准备好后重试。
+  let item;
+  try {
+    item=typeof window.resolveGuideLocation==='function' ? window.resolveGuideLocation(id) : LOCATIONS[id];
+  } catch(e) {
+    status('导览信息暂不可用，请重新确认路线。');
+    return false;
+  }
+  if(!item)return false;
+  currentId=id; announcedAt=Date.now(); announcedItem=item;
   $('place').textContent=item.name;
   $('detail').textContent=locationMessage(item);
   status(`已识别标记 ID ${id}`);
   void promptLocation(item);
   if(typeof CustomEvent!=='undefined') window.dispatchEvent(new CustomEvent('guide-recognized',{detail:{id,item}}));
+  return true;
 }
 function scan(t) {
   if (!stream) return;
@@ -251,14 +331,28 @@ function scan(t) {
     ctx.font='bold 22px sans-serif';ctx.fillStyle='#fff';
     ctx.fillText('ID '+m.id,m.corners[0].x,m.corners[0].y-8);
   });
-  // 首次解码即播报；持续可见时不重播，离开画面满 2 秒后再次出现可重播。
+  // 防误触：至少连续两次检测到同一个已登记 ID。
   const match=markers.find(m=>Object.prototype.hasOwnProperty.call(LOCATIONS,m.id));
-  if (!match) {clearPose('等待测量',true);candidateId=null;candidateCount=0;return;}
+  if (!match) {
+    clearPose('等待测量',true);candidateId=null;candidateCount=0;
+    const unknown=markers[0];
+    if(!unknown){unknownCandidateId=null;unknownCandidateCount=0;return;}
+    if(unknownCandidateId===unknown.id)unknownCandidateCount++;
+    else {unknownCandidateId=unknown.id;unknownCandidateCount=1;}
+    const now=Date.now(),previous=unknownAnnouncedAt.get(unknown.id);
+    if(unknownCandidateCount>=2 && (previous===undefined || now-previous>30000)) {
+      unknownAnnouncedAt.set(unknown.id,now);
+      // 未登记码不成为当前位置、不播报旧路线；由界面决定如何提示。
+      if(typeof CustomEvent!=='undefined')window.dispatchEvent(new CustomEvent('guide-unknown',{detail:{id:unknown.id}}));
+    }
+    return;
+  }
+  unknownCandidateId=null;unknownCandidateCount=0;
   if (candidateId===match.id) candidateCount++;else {candidateId=match.id;candidateCount=1;}
-  const seenAt=performance.now(),reentered=seenAt-lastMarkerSeenAt>=2000;
-  lastMarkerSeenAt=seenAt;
-  if(currentId!==match.id || reentered) announce(match.id);
   if(candidateCount>=2 || normalQuality?.confirmFrames===1) updatePose(match,w,h); else clearPose('正在确认标记');
+  if (candidateCount>=2 && (currentId!==match.id || Date.now()-announcedAt > 30000)) {
+     announce(match.id);
+  }
 }
 async function start() {
   if(stream || starting) return;
@@ -268,15 +362,19 @@ async function start() {
   const ticket=++session;
   $('start').disabled=true; $('stop').disabled=false;
   cancelPrompt();
+  const audioReady=prepareAudio(playback);
   try {
     detector=new AR.Detector({dictionaryName:'ARUCO'});
     const acquired=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}}});
     if (ticket!==session) {acquired.getTracks().forEach(t=>t.stop());return;}
     stream=acquired;
     video.srcObject=stream;await video.play();
+    await audioReady;
     if (ticket!==session) return;
     $('view').classList.add('active');$('start').disabled=true;$('stop').disabled=false;
-    currentId=null;candidateId=null;candidateCount=0;lastScan=0;lastMarkerSeenAt=-Infinity;status('摄像头已启动，正在寻找标记…');
+    currentId=null;announcedItem=null;candidateId=null;candidateCount=0;lastScan=0;
+    unknownCandidateId=null;unknownCandidateCount=0;unknownAnnouncedAt.clear();
+    status('摄像头已启动，正在寻找标记…');
     void promptLocation({message:'位置识别已开启，请缓慢移动手机，对准附近的标记。'});
     raf=requestAnimationFrame(scan);
   } catch(e) {
@@ -307,7 +405,7 @@ $('normal-quality').addEventListener('change',()=>{
 });
 document.addEventListener('visibilitychange',()=>{if(document.hidden)stop();});
 $('repeat').addEventListener('click',()=>void promptLocation(
-  currentId===null ? {message:'尚未识别到位置。'} : LOCATIONS[currentId],true));
+  currentId===null ? {message:'尚未识别到位置。'} : (announcedItem || LOCATIONS[currentId]),true));
 $('test-left').addEventListener('click',()=>void testDirection('left'));
 $('test-right').addEventListener('click',()=>void testDirection('right'));
 $('cancel-audio').addEventListener('click',()=>{

@@ -1,9 +1,9 @@
-import {ImuBluetoothClient} from './bluetooth.js';
-import {ReceiveStats} from './protocol.js';
+import {imuReceiver} from './receiver.js';
+import './orientation-panel.js';
 
 const $ = id => document.getElementById('imu-' + id);
-const client = new ImuBluetoothClient();
-const stats = new ReceiveStats();
+const client = imuReceiver;
+const stats = client.stats;
 let latest = null, latestHex = '', lastState = '', connectionError = '', lastInvalidLog = -Infinity, connectedAt = null;
 const groups = {quaternion: ['w', 'x', 'y', 'z'], euler: ['Roll', 'Pitch', 'Yaw'], accel: ['x', 'y', 'z'], gyro: ['x', 'y', 'z']};
 for (const [id, labels] of Object.entries(groups)) {
@@ -64,7 +64,7 @@ client.addEventListener('state', ({detail}) => {
   $('reconnect').disabled = !supported || detail.busy || !detail.known || detail.state === 'connected';
   $('disconnect').disabled = !['connected', 'connecting'].includes(detail.state);
   if (['selecting', 'connecting'].includes(detail.state) && !['selecting', 'connecting'].includes(lastState)) {
-    stats.reset(); clearReadings(); connectionError = '';
+    clearReadings(); connectionError = '';
   }
   if (['disconnected', 'error'].includes(detail.state)) clearReadings();
   if (detail.state === 'connected' && lastState !== 'connected') connectedAt = performance.now();
@@ -74,17 +74,17 @@ client.addEventListener('state', ({detail}) => {
 });
 client.addEventListener('packet', ({detail}) => {
   latest = detail.packet; latestHex = detail.hex;
-  stats.receive(latest, detail.time); connectionError = '';
+  connectionError = '';
   renderReadings(); updateStatus();
 });
 client.addEventListener('invalid', ({detail}) => {
-  stats.invalid++;
   if (performance.now() - lastInvalidLog >= 1000) { log(`已丢弃无效包：${detail.message}`); lastInvalidLog = performance.now(); }
   updateStatus();
 });
 client.addEventListener('error', ({detail}) => { connectionError = detail; log(detail); updateStatus(); });
 client.addEventListener('message', ({detail}) => log(detail));
 function updateStatus() {
+  client.checkFreshness();
   const now = performance.now(), connected = client.state === 'connected';
   const stale = connected && stats.stale(now);
   $('rate').textContent = (connected ? stats.rate(now) : 0).toFixed(1);

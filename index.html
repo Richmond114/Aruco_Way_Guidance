@@ -1,7 +1,7 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#ffe16d"><title>寻径 · 室内导盲</title><link rel="stylesheet" href="style.css?v=map-v3"><link rel="stylesheet" href="imu/panel.css?v=imu-v1"></head><body><div class="phone"><header id="header" hidden><button data-go="home" class="back" aria-label="返回首页">← 返回</button><button data-go="tools" class="tools-link">工具与设置</button></header><div class="dots" aria-hidden="true"></div><main id="pages"></main><section id="scanner" hidden><h1 class="sr-only">识别室内信息码</h1><div class="view" id="view">
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#ffe16d"><title>寻径 · 室内导盲</title><link rel="stylesheet" href="style.css?v=map-v3"><link rel="stylesheet" href="imu/panel.css?v=imu-v1"><link rel="stylesheet" href="tour.css?v=1"></head><body><div class="phone"><header id="header" hidden><button data-go="home" class="back" aria-label="返回首页">← 返回</button><button data-go="tools" class="tools-link">工具与设置</button></header><div class="dots" aria-hidden="true"></div><main id="pages"></main><section id="scanner" hidden><h1 class="sr-only">识别室内信息码</h1><div class="view" id="view">
   <video id="video" autoplay playsinline muted aria-label="实时摄像头画面"></video>
   <canvas id="overlay" aria-hidden="true"></canvas>
-  <div class="hint">点击「开始识别」，将摄像头对准墙面或导向标识上的 ArUco 标记。</div>
+  <div class="hint">点击「开始识别」，将摄像头对准盲道旁的 ArUco 标记。</div>
 </div>
 <div class="bar">
  <button class="primary" id="start">开始识别</button>
@@ -14,29 +14,52 @@
  <div class="status" id="status" role="status">摄像头未启动</div>
  <div class="bar"><button class="secondary" id="repeat">🔊 重播提示</button></div>
 </section>
-<h2 id="scan-title">正在识别信息码……</h2><p id="scan-sub">识别成功后将语音播报</p><svg class="torch-symbol" aria-hidden="true" viewBox="0 0 80 60" fill="none" stroke="currentColor" stroke-width="6" stroke-linejoin="round"><path d="M10 22h32q3-12 15-12h14v40H57q-12 0-15-12H10zM60 10v40"/></svg><button class="primary" id="torch">开启手电筒</button><button class="link" data-go="demo">没有标记？体验演示</button><div class="scan-controls"></div></section><section id="tools" hidden><h1>工具与设置</h1><p class="muted">距离为实验粗估，参考点为摄像头。</p><section id="imu-panel" class="panel imu-panel" aria-labelledby="imu-heading"><h2 id="imu-heading">IMU 蓝牙与实时姿态</h2><p class="note">连接外置 ArUco-IMU-C3，查看传感器的原始姿态。返回扫码页面后仍保持连接。</p>
+<h2 id="scan-title">正在识别信息码……</h2><p id="scan-sub">识别成功后将语音播报</p><svg class="torch-symbol" aria-hidden="true" viewBox="0 0 80 60" fill="none" stroke="currentColor" stroke-width="6" stroke-linejoin="round"><path d="M10 22h32q3-12 15-12h14v40H57q-12 0-15-12H10zM60 10v40"/></svg><button class="primary" id="torch">开启手电筒</button><button class="link" data-go="demo">没有标记？体验演示</button><div class="scan-controls"></div></section><section id="tools" hidden><h1>工具与设置</h1><button class="secondary" data-go="navigation">返回本次路线</button><section class="panel"><h2>本站讲解内容</h2><div id="content-editor"></div></section><section class="panel"><h2>空间与布点</h2><a class="small-button" href="https://cinq929.github.io/college-1f-lab/" target="_blank" rel="noopener">打开空间导览与三维布点 ↗</a><a class="small-button" href="spatial/floorplan.json" download>下载本版建筑数据</a><p class="note">主导览使用固定的建筑原图版本。空间实验室的在线修改不会自动同步到此处。</p></section><p class="muted">距离为实验粗估，参考点为摄像头。</p><section id="imu-panel" class="panel imu-panel" aria-labelledby="imu-heading"><h2 id="imu-heading">IMU 蓝牙与实时姿态</h2><p class="note">连接外置 ArUco-IMU-C3，查看传感器的原始姿态。返回扫码页面后仍保持连接。</p>
+
   <section class="connection card" aria-label="设备连接">
+
     <div class="connection-top"><div><span id="imu-status" class="badge" role="status">未连接</span><h2 id="imu-device-name">ArUco-IMU-C3</h2></div><span id="imu-freshness" class="muted">等待连接</span></div>
+
     <div class="buttons"><button id="imu-connect" class="secondary" disabled>连接设备</button><button id="imu-reconnect" disabled>重新连接</button><button id="imu-disconnect" disabled>断开</button></div>
+
     <p id="imu-connection-hint" class="hint">先断开 nRF Connect，再点击连接，选择 ArUco-IMU-C3。</p>
+
     <p id="imu-environment" class="notice" hidden></p>
+
   </section>
+
   <div id="imu-alert" class="notice warning" role="status" hidden></div>
+
   <section class="metrics" aria-label="接收统计">
+
     <div class="card"><span>有效接收频率</span><strong><b id="imu-rate">0.0</b><small> Hz</small></strong><span class="caption">最近 2 秒 · 目标 20 Hz</span></div>
+
     <div class="card"><span>当前数据包</span><strong id="imu-format">—</strong><span id="imu-sequence" class="caption">采样序号 —</span></div>
+
     <div class="card"><span>接收计数</span><strong id="imu-count">0</strong><span class="caption">无效 <b id="imu-invalid">0</b> · 重复序号 <b id="imu-duplicates">0</b></span></div>
+
   </section>
+
   <section id="imu-readings" class="readings" aria-label="实时测量">
+
     <article class="card reading"><div class="title-row"><h2>四元数</h2><span>w · x · y · z</span></div><div id="imu-quaternion" class="values four"></div><p class="footnote">模长 <b id="imu-norm">—</b><span id="imu-norm-hint"> · 保留原始值，不自动归一化</span></p></article>
+
     <article class="card reading"><div class="title-row"><h2>欧拉角</h2><label class="unit-toggle">单位 <select id="imu-angle-unit" aria-label="欧拉角单位"><option value="deg">° 度</option><option value="rad">rad 弧度</option></select></label></div><div id="imu-euler" class="values"></div><p id="imu-euler-note" class="footnote">等待完整数据包</p></article>
+
     <article class="card reading"><div class="title-row"><h2>加速度</h2><span>g</span></div><div id="imu-accel" class="values"></div><p id="imu-accel-note" class="footnote">传感器原始坐标系 · 未去除重力</p></article>
+
     <article class="card reading"><div class="title-row"><h2>角速度</h2><span>rad/s</span></div><div id="imu-gyro" class="values"></div><p id="imu-gyro-note" class="footnote">传感器原始坐标系</p></article>
+
   </section>
+
   <details class="card diagnostics"><summary>原始数据与连接日志</summary><div class="detail-body"><div class="title-row"><h3>最近一条有效包</h3><button id="imu-copy" disabled>复制 HEX</button></div><pre id="imu-raw">尚未收到数据</pre><p class="hint">协议 v1 · 小端 float32 · 序号按 50 Hz 成功采样递增，跳号不直接等于丢包。</p><h3>事件日志 <button id="imu-clear-log" class="text-button">清空</button></h3><ol id="imu-logs" aria-label="连接事件日志"></ol></div></details>
+
   <details class="card help"><summary>连接与测试提示</summary><div class="detail-body"><ol><li>使用 Android Chrome，通过受信任的 HTTPS 地址直接打开页面。</li><li>为 Chrome 开启蓝牙/附近设备权限，并断开 nRF Connect 中的连接。</li><li>点击“连接设备”后选择设备，页面会自动订阅通知。</li><li>缓慢旋转 IMU，观察数值变化；保持静止时四元数模长应接近 1。</li><li>如果收到 20 字节包，只包含四元数；56 字节包包含全部测量。网页没有手动设置 MTU 的按钮，协商由浏览器与系统处理。</li></ol></div></details>
 
+
+
 </section>
+
 <section class="panel" aria-labelledby="pose-heading">
  <div class="eyebrow" id="pose-heading">距离与平面角度（实验估计）</div>
  <label>测距模式
@@ -71,6 +94,6 @@
   <button class="secondary" id="cancel-audio">停止提示</button>
  </div>
  <div class="status" id="audio-status" role="status">空间音频尚未启用</div>
- <p class="note">演示配置：ID 1（一楼电梯）右转，ID 3（二楼主走廊）左转。方向按预设路线解释，实际使用前请调整现场配置。</p>
+ <p class="note">路线转向根据建筑原图折线与预设来向生成；先确认身体朝向。IMU 原始姿态不会自动作为人体朝向。</p>
 </section>
-<section class="panel"><h2>标定与实验</h2><a class="small-button" href="lab.html">进入测位实验室 ↗</a><a class="small-button" href="markers.html">查看 / 打印测试标记 ↗</a><p class="muted">标记位置与转向沿用原仓库演示配置；现场部署前须修改。无法探测障碍。</p></section></section><footer><button data-go="tools">工具与设置</button><span>寻径 · 室内无障碍导览</span></footer></div><script src="vendor/cv.js"></script><script src="vendor/aruco.js"></script><script src="pose.js"></script><script src="scale-distance.js"></script><script src="lab-pose.js"></script><script src="measurement-display.js"></script><script src="core.js"></script><script src="app.js?v=map-v3"></script><script type="module" src="imu/app.js?v=imu-v1"></script></body></html>
+<section class="panel"><h2>标定与实验</h2><a class="small-button" href="lab.html">进入测位实验室 ↗</a><a class="small-button" href="markers.html">查看 / 打印测试标记 ↗</a><p class="muted">一楼 ID 0–11 与旧原型的地点含义不同，现场布点请按新清单核对。</p></section></section><footer><button data-go="tools">工具与设置</button><span>寻径 · 室内无障碍导览</span></footer></div><script src="vendor/cv.js"></script><script src="vendor/aruco.js"></script><script src="pose.js"></script><script src="scale-distance.js"></script><script src="lab-pose.js"></script><script src="measurement-display.js"></script><script src="spatial/guide-data.js"></script><script src="locations.js"></script><script src="tour-engine.js"></script><script src="core.js?v=mobile-voice-20261115-1"></script><script src="app.js?v=mobile-voice-20261115-1"></script><script type="module" src="imu/app.js?v=imu-v3"></script></body></html>
